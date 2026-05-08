@@ -1,0 +1,14 @@
+[workspace]
+members = ["programs/giveaways"]
+resolver = "2"
+
+[profile.dev]
+# Keep project-level symbols while shrinking workspace debug artifacts.
+debug = 1
+incremental = true
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.release]
+overflow-checks = true

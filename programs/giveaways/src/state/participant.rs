@@ -1,0 +1,153 @@
+//! # Participant Account State
+//!
+//! The Participant account stores individual participant data including
+//! proof text, commitment hash, and attestation status.
+
+use crate::constants::*;
+use anchor_lang::prelude::*;
+
+/// Individual participant state
+///
+/// Each participant has one account per giveaway containing their
+/// proof text, commitment hash, and participation status.
+///
+/// ## PDA Seeds
+/// `["participant", giveaway_pubkey, wallet_pubkey]`
+#[account]
+pub struct Participant {
+    /// Giveaway this participant is enrolled in
+    pub giveaway: Pubkey,
+
+    /// Participant wallet address
+    pub wallet: Pubkey,
+
+    /// Proof-of-chance commitment hash (SHA256 of lucky_words || 0x1f || salt)
+    pub commitment_hash: [u8; 32],
+
+    /// Proof text submitted by participant (social links, handles, etc.)
+    pub proof_text: String,
+
+    /// Whether participant has attested to uploading reveal
+    pub attested_uploaded: bool,
+
+    /// When attestation was submitted (0 if not attested)
+    pub attested_at_unix: i64,
+
+    /// Whether reveal has been included in provider upload
+    pub reveal_included: bool,
+
+    /// Whether participant has been disqualified
+    pub disqualified: bool,
+
+    /// Disqualification reason code (0 if not disqualified)
+    pub disqualification_reason: u8,
+
+    /// When participant was disqualified (0 if not disqualified)
+    pub disqualified_at_unix: i64,
+
+    /// When this participant entry was created
+    pub created_at_unix: i64,
+
+    /// When this participant entry was last updated
+    pub last_updated_unix: i64,
+
+    /// Reserved space for future fields
+    pub reserved: [u8; 64],
+}
+
+impl Participant {
+    /// Maximum size of Participant account in bytes
+    pub const MAX_SIZE: usize = 8 + // discriminator
+        32 +  // giveaway
+        32 +  // wallet
+        32 +  // commitment_hash
+        4 + MAX_PROOF_TEXT_LEN + // proof_text
+        1 +   // attested_uploaded
+        8 +   // attested_at_unix
+        1 +   // reveal_included
+        1 +   // disqualified
+        1 +   // disqualification_reason
+        8 +   // disqualified_at_unix
+        8 +   // created_at_unix
+        8 +   // last_updated_unix
+        64; // reserved
+
+    /// Initialize a new participant
+    pub fn initialize(
+        &mut self,
+        giveaway: Pubkey,
+        wallet: Pubkey,
+        commitment_hash: [u8; 32],
+        proof_text: String,
+        current_time: i64,
+    ) {
+        self.giveaway = giveaway;
+        self.wallet = wallet;
+        self.commitment_hash = commitment_hash;
+        self.proof_text = proof_text;
+        self.attested_uploaded = false;
+        self.attested_at_unix = 0;
+        self.reveal_included = false;
+        self.disqualified = false;
+        self.disqualification_reason = 0;
+        self.disqualified_at_unix = 0;
+        self.created_at_unix = current_time;
+        self.last_updated_unix = current_time;
+        self.reserved = [0; 64];
+    }
+
+    /// Update participant entry
+    pub fn update(&mut self, commitment_hash: [u8; 32], proof_text: String, current_time: i64) {
+        self.commitment_hash = commitment_hash;
+        self.proof_text = proof_text;
+        self.last_updated_unix = current_time;
+    }
+
+    /// Mark as attested
+    pub fn mark_attested(&mut self, current_time: i64) {
+        self.attested_uploaded = true;
+        self.attested_at_unix = current_time;
+        self.last_updated_unix = current_time;
+    }
+
+    /// Mark reveal as included
+    pub fn mark_reveal_included(&mut self, current_time: i64) {
+        self.reveal_included = true;
+        self.last_updated_unix = current_time;
+    }
+
+    /// Disqualify participant
+    pub fn disqualify(&mut self, reason_code: u8, current_time: i64) {
+        self.disqualified = true;
+        self.disqualification_reason = reason_code;
+        self.disqualified_at_unix = current_time;
+        self.last_updated_unix = current_time;
+    }
+
+    /// Check if participant is eligible for winner selection
+    pub fn is_eligible(&self) -> bool {
+        !self.disqualified && self.reveal_included
+    }
+
+    /// Validate proof text length
+    pub fn validate_proof_text(proof_text: &str) -> bool {
+        proof_text.len() <= MAX_PROOF_TEXT_LEN
+    }
+
+    /// Validate commitment hash (must be non-zero)
+    pub fn validate_commitment_hash(commitment_hash: &[u8; 32]) -> bool {
+        commitment_hash != &[0u8; 32]
+    }
+
+    /// Validate disqualification reason code
+    pub fn validate_reason_code(reason_code: u8) -> bool {
+        matches!(
+            reason_code,
+            crate::constants::disqualification_reasons::INCOMPLETE_TASKS
+                | crate::constants::disqualification_reasons::INVALID_PROOF
+                | crate::constants::disqualification_reasons::TERMS_VIOLATION
+                | crate::constants::disqualification_reasons::DUPLICATE_ENTRY
+                | crate::constants::disqualification_reasons::OTHER
+        )
+    }
+}

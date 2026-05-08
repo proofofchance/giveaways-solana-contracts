@@ -1,0 +1,88 @@
+//! # Program Constants
+//!
+//! Defines all constant values used throughout the giveaways program
+//! including account seeds, size limits, and default values.
+
+// Branding and requirements moved off-chain
+
+/// Maximum length for participant proof text (UTF-8 bytes)
+pub const MAX_PROOF_TEXT_LEN: usize = 256;
+
+/// Maximum length for lucky words in proof-of-chance (UTF-8 bytes)
+pub const MAX_LUCKY_WORDS_LEN: usize = 32;
+
+/// Maximum length for salt in proof-of-chance (bytes)
+pub const MAX_SALT_LEN: usize = 16;
+
+/// Maximum length for reveal plaintext (lucky_words + 0x1f + salt)
+pub const MAX_REVEAL_PLAINTEXT_LEN: usize = MAX_LUCKY_WORDS_LEN + 1 + MAX_SALT_LEN;
+
+/// Separator between lucky words and salt in proof-of-chance reveal plaintext.
+pub const REVEAL_SEPARATOR: u8 = 0x1f;
+
+/// Maximum service fee in basis points (99.99%)
+pub const MAX_SERVICE_FEE_BPS: u16 = 9999;
+
+/// Minimum number of winners allowed
+pub const MIN_WINNERS: u32 = 1;
+
+/// Maximum number of winners allowed per giveaway
+pub const MAX_WINNERS: u32 = 1000;
+
+/// Minimum active duration in seconds (1 hour)
+pub const MIN_ACTIVE_DURATION_SECS: u32 = 3600;
+
+/// Maximum active duration in seconds (30 days)
+pub const MAX_ACTIVE_DURATION_SECS: u32 = 30 * 24 * 3600;
+
+/// Minimum upload/attestation duration in seconds (1 hour)
+pub const MIN_UPLOAD_DURATION_SECS: u32 = 3600;
+
+/// Maximum upload/attestation duration in seconds (7 days)
+pub const MAX_UPLOAD_DURATION_SECS: u32 = 7 * 24 * 3600;
+
+/// Default active duration in seconds (24 hours)
+pub const DEFAULT_ACTIVE_DURATION_SECS: u32 = 24 * 3600;
+
+/// Default upload/attestation duration in seconds (24 hours)
+pub const DEFAULT_UPLOAD_DURATION_SECS: u32 = 24 * 3600;
+
+/// Default service fee in basis points (5%)
+pub const DEFAULT_SERVICE_FEE_BPS: u16 = 500;
+
+/// Minimum lamports for rent exemption buffer
+pub const MIN_RENT_EXEMPTION: u64 = 1_000_000; // ~0.001 SOL
+
+/// Maximum participants per reveal upload batch
+pub const MAX_REVEALS_PER_BATCH: usize = 50;
+
+/// Maximum winners per settlement batch
+pub const MAX_WINNERS_PER_BATCH: usize = 50;
+
+// Proof-of-chance domains
+pub const GIVEAWAY_ATTESTATION_DOMAIN_V1: &[u8] = b"GIVEAWAY_ATTEST_V1";
+pub const GIVEAWAY_REVEAL_DOMAIN_V1: &[u8] = b"GIVEAWAY_REVEAL_V1";
+pub const GIVEAWAY_SEED_DOMAIN_V1: &[u8] = b"GIVEAWAY_SEED_V1";
+pub const GIVEAWAY_DRAW_DOMAIN_V1: &[u8] = b"GIVEAWAY_DRAW_V1";
+pub const GIVEAWAY_RULE_VERSION_V1: &str = "giveaway-poc-v1";
+
+// PDA Seeds
+pub const CONFIG_SEED: &[u8] = b"config";
+pub const GIVEAWAY_SEED: &[u8] = b"giveaway";
+pub const PARTICIPANT_SEED: &[u8] = b"participant";
+pub const VAULT_SEED: &[u8] = b"vault";
+pub const WINNERS_LEDGER_SEED: &[u8] = b"winners_ledger";
+
+/// Disqualification reason codes
+pub mod disqualification_reasons {
+    /// Did not complete required tasks
+    pub const INCOMPLETE_TASKS: u8 = 1;
+    /// Provided invalid or fake proof
+    pub const INVALID_PROOF: u8 = 2;
+    /// Violated giveaway terms
+    pub const TERMS_VIOLATION: u8 = 3;
+    /// Duplicate or spam entry
+    pub const DUPLICATE_ENTRY: u8 = 4;
+    /// Other reason (manual review)
+    pub const OTHER: u8 = 255;
+}
