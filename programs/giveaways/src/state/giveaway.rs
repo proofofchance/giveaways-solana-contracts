@@ -27,8 +27,9 @@ pub enum GiveawayStatus {
 /// ## Lifecycle Phases
 /// 1. **Active**: Accepting participation entries (active_start_unix to active_deadline_unix)
 /// 2. **Upload**: Participants upload PoC and attest (active_deadline_unix to upload_deadline_unix)
-/// 3. **Settlement**: Provider uploads proofs and settlement executes (after upload_deadline_unix or all attested)
-/// 4. **Settled**: All winners paid and giveaway complete
+/// 3. **Remediation**: Anyone can include signed/attested reveals omitted by the provider
+/// 4. **Settlement**: Winners compute only after all attested reveals are included
+/// 5. **Settled**: All winners paid and giveaway complete
 #[account]
 pub struct Giveaway {
     /// Unique giveaway ID (sequential)
@@ -103,8 +104,14 @@ pub struct Giveaway {
     /// Whether settlement is complete
     pub settled: bool,
 
+    /// When omitted-reveal remediation began (0 if not active/needed)
+    pub remediation_start_unix: i64,
+
+    /// When omitted-reveal remediation expires (0 if not active/needed)
+    pub remediation_deadline_unix: i64,
+
     /// Reserved space for future fields
-    pub reserved: [u8; 128],
+    pub reserved: [u8; 112],
 }
 
 impl Giveaway {
@@ -134,7 +141,9 @@ impl Giveaway {
         1 +   // winners_locked
         4 +   // recompute_version
         1 +   // settled
-        128; // reserved
+        8 +   // remediation_start_unix
+        8 +   // remediation_deadline_unix
+        112; // reserved
 
     /// Initialize a new giveaway
     #[allow(clippy::too_many_arguments)]
@@ -176,7 +185,9 @@ impl Giveaway {
         self.winners_locked = false;
         self.recompute_version = 0;
         self.settled = false;
-        self.reserved = [0; 128];
+        self.remediation_start_unix = 0;
+        self.remediation_deadline_unix = 0;
+        self.reserved = [0; 112];
     }
 
     /// Check if giveaway is in active phase (accepting participation)
@@ -202,6 +213,8 @@ impl Giveaway {
     pub fn get_phase(&self, current_time: i64) -> &'static str {
         if self.settled {
             "settled"
+        } else if self.remediation_active(current_time) {
+            "remediation"
         } else if self.is_in_active_phase(current_time) {
             "active"
         } else if self.is_in_upload_phase(current_time) {
@@ -234,6 +247,39 @@ impl Giveaway {
         self.poc_aggregate_hash = aggregate_hash;
         self.uploads_complete =
             self.attested_count > 0 && self.provider_uploaded_count >= self.attested_count;
+    }
+
+    /// Returns true when some accepted/attested reveals have not yet been included.
+    pub fn has_missing_attested_reveals(&self) -> bool {
+        self.attested_count > 0 && self.provider_uploaded_count < self.attested_count
+    }
+
+    /// Returns true when every accepted/attested reveal has been included.
+    pub fn attested_reveals_complete(&self) -> bool {
+        self.attested_count > 0 && self.provider_uploaded_count >= self.attested_count
+    }
+
+    /// Starts omitted-reveal remediation if it is needed and has not already started.
+    pub fn begin_remediation(&mut self, current_time: i64) {
+        if self.remediation_start_unix == 0 {
+            self.remediation_start_unix = current_time;
+            self.remediation_deadline_unix = current_time + DEFAULT_REMEDIATION_WINDOW_SECS;
+        }
+    }
+
+    /// Returns true while the remediation/challenge window is open.
+    pub fn remediation_active(&self, current_time: i64) -> bool {
+        self.remediation_start_unix > 0
+            && self.remediation_deadline_unix > 0
+            && current_time <= self.remediation_deadline_unix
+            && self.has_missing_attested_reveals()
+    }
+
+    /// Returns true when omitted-reveal remediation expired without full inclusion.
+    pub fn remediation_expired(&self, current_time: i64) -> bool {
+        self.remediation_deadline_unix > 0
+            && current_time > self.remediation_deadline_unix
+            && self.has_missing_attested_reveals()
     }
 
     /// Disqualify a participant

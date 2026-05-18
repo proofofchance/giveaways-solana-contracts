@@ -47,6 +47,10 @@ pub const DEFAULT_ACTIVE_DURATION_SECS: u32 = 24 * 3600;
 /// Default upload/attestation duration in seconds (24 hours)
 pub const DEFAULT_UPLOAD_DURATION_SECS: u32 = 24 * 3600;
 
+/// Default remediation/challenge window after upload deadline when accepted
+/// attested reveals have not all been included.
+pub const DEFAULT_REMEDIATION_WINDOW_SECS: i64 = 30 * 60;
+
 /// Default service fee in basis points (5%)
 pub const DEFAULT_SERVICE_FEE_BPS: u16 = 500;
 

@@ -1,7 +1,9 @@
 //! # Upload Reveals Instruction
 //!
 //! Allows the service provider to upload batches of participant reveals
-//! for proof-of-chance entropy generation.
+//! for proof-of-chance entropy generation. After the upload deadline, if
+//! accepted/attested reveals were omitted, the same instruction becomes
+//! permissionless remediation: any signer can include missing attested reveals.
 
 use crate::{
     constants::*,
@@ -32,16 +34,13 @@ pub struct UploadReveals<'info> {
     )]
     pub giveaway: Account<'info, Giveaway>,
 
-    #[account(
-        constraint = authority.key() == config.authority @ GiveawayError::Unauthorized
-    )]
     pub authority: Signer<'info>,
 }
 
 pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<()> {
-    let _config = &ctx.accounts.config;
+    let config = &ctx.accounts.config;
     let giveaway = &mut ctx.accounts.giveaway;
-    let _authority = &ctx.accounts.authority;
+    let uploader = &ctx.accounts.authority;
     let clock = Clock::get()?;
 
     // Validate batch size
@@ -51,10 +50,39 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
     );
 
     // Reveals can be uploaded once the upload phase has started. They may also
-    // be uploaded immediately when all participants have attested.
+    // be uploaded immediately when all participants have attested. After the
+    // upload deadline, omitted attested reveals can be included by any signer
+    // during remediation.
     let upload_started = clock.unix_timestamp >= giveaway.upload_start_unix;
+    let upload_elapsed = clock.unix_timestamp >= giveaway.upload_deadline_unix;
     let all_attested =
         giveaway.participants_count > 0 && giveaway.attested_count == giveaway.participants_count;
+    let is_authority = uploader.key() == config.authority;
+    let can_remediate = !is_authority
+        && upload_elapsed
+        && giveaway.has_missing_attested_reveals()
+        && !giveaway.remediation_expired(clock.unix_timestamp);
+
+    require!(
+        !giveaway.remediation_expired(clock.unix_timestamp),
+        GiveawayError::InvalidInstruction
+    );
+    require!(is_authority || can_remediate, GiveawayError::Unauthorized);
+
+    if can_remediate && giveaway.remediation_start_unix == 0 {
+        giveaway.begin_remediation(clock.unix_timestamp);
+        crate::events::GiveawayEvent::RevealRemediationBegan {
+            giveaway_id: giveaway.id,
+            giveaway: giveaway.key().to_string(),
+            included_reveals_count: giveaway.provider_uploaded_count,
+            attested_count: giveaway.attested_count,
+            remediation_start_unix: giveaway.remediation_start_unix,
+            remediation_deadline_unix: giveaway.remediation_deadline_unix,
+            timestamp: clock.unix_timestamp,
+        }
+        .emit();
+    }
+
     require!(
         upload_started || all_attested,
         GiveawayError::UploadWindowNotStarted
@@ -137,11 +165,22 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
     // Update giveaway reveal count
     let aggregate_hash = xor_reveal_digests(giveaway.poc_aggregate_hash, &reveal_digests);
     giveaway.add_uploaded_reveals(valid_reveals, aggregate_hash);
+    if giveaway.uploads_complete && giveaway.remediation_start_unix > 0 {
+        crate::events::GiveawayEvent::RevealRemediationCompleted {
+            giveaway_id: giveaway.id,
+            giveaway: giveaway.key().to_string(),
+            included_reveals_count: giveaway.provider_uploaded_count,
+            attested_count: giveaway.attested_count,
+            timestamp: clock.unix_timestamp,
+        }
+        .emit();
+    }
 
     // Emit event
     crate::events::GiveawayEvent::RevealsUploaded {
         giveaway_id: giveaway.id,
         giveaway: giveaway.key().to_string(),
+        authority: uploader.key().to_string(),
         batch_size: valid_reveals,
         total_reveals_uploaded: giveaway.provider_uploaded_count,
         total_attested: giveaway.attested_count,

@@ -63,11 +63,28 @@ pub enum GiveawayEvent {
     RevealsUploaded {
         giveaway_id: u64,
         giveaway: String,
+        authority: String,
         batch_size: u32,
         total_reveals_uploaded: u32,
         total_attested: u32,
         aggregate_hash: String,
         uploads_complete: bool,
+        timestamp: i64,
+    },
+    RevealRemediationBegan {
+        giveaway_id: u64,
+        giveaway: String,
+        included_reveals_count: u32,
+        attested_count: u32,
+        remediation_start_unix: i64,
+        remediation_deadline_unix: i64,
+        timestamp: i64,
+    },
+    RevealRemediationCompleted {
+        giveaway_id: u64,
+        giveaway: String,
+        included_reveals_count: u32,
+        attested_count: u32,
         timestamp: i64,
     },
     UploadPhaseBegan {

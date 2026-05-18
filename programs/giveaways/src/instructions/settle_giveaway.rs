@@ -76,6 +76,8 @@ pub fn process(ctx: Context<SettleGiveaway>) -> Result<()> {
             GiveawayError::SettlementNotReady
         );
         "no_attesters"
+    } else if giveaway.remediation_expired(clock.unix_timestamp) {
+        "accepted_reveals_omitted_after_remediation"
     } else if giveaway.winners_computed
         && accounts.winners_ledger.giveaway == giveaway_key
         && accounts.winners_ledger.winners_count == 0

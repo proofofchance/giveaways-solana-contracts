@@ -44,10 +44,14 @@ pub fn process(ctx: Context<RecomputeWinners>) -> Result<()> {
         giveaway.attested_count > 0,
         GiveawayError::NoEligibleParticipants
     );
-    require!(
-        giveaway.provider_uploaded_count >= giveaway.attested_count && giveaway.uploads_complete,
-        GiveawayError::MissingAttestedParticipants
-    );
+
+    if giveaway.has_missing_attested_reveals() {
+        return Err(GiveawayError::MissingAttestedParticipants.into());
+    }
+
+    if giveaway.attested_reveals_complete() && !giveaway.uploads_complete {
+        giveaway.uploads_complete = true;
+    }
 
     // Collect all reveal-included participants. The count check prevents a
     // caller from recomputing with only a subset of uploaded accounts.

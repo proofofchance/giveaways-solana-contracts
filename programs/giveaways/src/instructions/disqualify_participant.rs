@@ -44,6 +44,14 @@ pub fn process(ctx: Context<DisqualifyParticipant>, reason_code: u8) -> Result<(
     // Validate reason code
     validate_reason_code(reason_code)?;
 
+    // Eligibility is locked once the upload/attestation phase starts. After
+    // participants can reveal entropy, creator-side disqualification would be
+    // a settlement-gaming surface.
+    require!(
+        clock.unix_timestamp < giveaway.upload_start_unix,
+        GiveawayError::InvalidInstruction
+    );
+
     // Disqualify participant
     participant_account.disqualify(reason_code, clock.unix_timestamp);
 

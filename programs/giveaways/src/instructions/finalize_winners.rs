@@ -6,6 +6,7 @@
 use crate::{
     constants::*,
     error::GiveawayError,
+    events::GiveawayEvent,
     state::{Config, Giveaway, Participant, WinnersLedger},
     utils::crypto::{build_merkle_tree, compute_winner_seed, select_winners, WinnerEntry},
 };
@@ -64,10 +65,31 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
         giveaway.attested_count > 0,
         GiveawayError::NoEligibleParticipants
     );
-    require!(
-        giveaway.provider_uploaded_count >= giveaway.attested_count && giveaway.uploads_complete,
-        GiveawayError::MissingAttestedParticipants
-    );
+
+    if giveaway.has_missing_attested_reveals() {
+        if clock.unix_timestamp >= giveaway.upload_deadline_unix
+            && giveaway.remediation_start_unix == 0
+        {
+            giveaway.begin_remediation(clock.unix_timestamp);
+            GiveawayEvent::RevealRemediationBegan {
+                giveaway_id: giveaway.id,
+                giveaway: giveaway.key().to_string(),
+                included_reveals_count: giveaway.provider_uploaded_count,
+                attested_count: giveaway.attested_count,
+                remediation_start_unix: giveaway.remediation_start_unix,
+                remediation_deadline_unix: giveaway.remediation_deadline_unix,
+                timestamp: clock.unix_timestamp,
+            }
+            .emit();
+            return Ok(());
+        }
+
+        return Err(GiveawayError::MissingAttestedParticipants.into());
+    }
+
+    if giveaway.attested_reveals_complete() && !giveaway.uploads_complete {
+        giveaway.uploads_complete = true;
+    }
 
     // Collect all reveal-included participants. The count check prevents a
     // caller from finalizing with only a subset of uploaded accounts.
