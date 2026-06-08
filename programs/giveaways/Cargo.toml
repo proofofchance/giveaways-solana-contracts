@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "ProofOfChance Giveaways Program - Transparent brand giveaways with proof-of-chance winner selection"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/proofofchance/proofofchance"
+repository = "https://github.com/proofofchance/giveaways-solana-contracts"
 
 [lib]
 crate-type = ["cdylib", "lib"]

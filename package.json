@@ -1,5 +1,5 @@
 {
-  "name": "giveaways-solana-contracts-private",
+  "name": "giveaways-solana-contracts",
   "description": "Giveaways Solana contracts workspace",
   "private": true,
   "scripts": {
