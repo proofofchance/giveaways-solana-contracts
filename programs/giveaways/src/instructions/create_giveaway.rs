@@ -72,9 +72,25 @@ pub fn process(
         MAX_UPLOAD_DURATION_SECS,
     )?;
     validate_timing_sequence(active_start_unix, active_deadline_unix)?;
+    require!(
+        Giveaway::validate_timing(
+            active_start_unix,
+            active_deadline_unix,
+            upload_duration_secs
+        ),
+        GiveawayError::InvalidTiming
+    );
+    let upload_deadline_unix = active_deadline_unix
+        .checked_add(i64::from(upload_duration_secs))
+        .ok_or(GiveawayError::MathOverflow)?;
 
     // Validate minimum payout
     require!(total_payout_lamports > 0, GiveawayError::InsufficientFunds);
+    validate_minimum_winners_pool(
+        total_payout_lamports,
+        config.service_fee_bps,
+        number_of_winners,
+    )?;
 
     // Funding model: host deposits ONLY total_payout; service fee is taken at settlement
     // from the winners pool actually paid. Any leftover after winners+fee returns to host.
@@ -129,7 +145,7 @@ pub fn process(
         active_start_unix,
         active_deadline_unix,
         upload_start_unix: active_deadline_unix,
-        upload_deadline_unix: active_deadline_unix + upload_duration_secs as i64,
+        upload_deadline_unix,
         service_fee_bps: config.service_fee_bps,
         timestamp: clock.unix_timestamp,
     }

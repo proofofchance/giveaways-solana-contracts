@@ -75,6 +75,25 @@ pub fn validate_timing_sequence(start_time: i64, end_time: i64) -> Result<()> {
     Ok(())
 }
 
+/// Validate that a funded giveaway can pay at least the minimum winner amount.
+pub fn validate_minimum_winners_pool(
+    total_payout_lamports: u64,
+    service_fee_bps: u16,
+    number_of_winners: u32,
+) -> Result<()> {
+    let service_fee =
+        ((u128::from(total_payout_lamports) * u128::from(service_fee_bps)) / 10_000u128) as u64;
+    let winners_pool = total_payout_lamports.saturating_sub(service_fee);
+    let minimum_winners_pool = (number_of_winners as u64)
+        .checked_mul(crate::constants::MIN_WINNER_PAYOUT_LAMPORTS)
+        .ok_or(GiveawayError::MathOverflow)?;
+    require!(
+        winners_pool >= minimum_winners_pool,
+        GiveawayError::InsufficientFunds
+    );
+    Ok(())
+}
+
 /// Validate that current time is within a window
 pub fn validate_time_window(current_time: i64, start_time: i64, end_time: i64) -> Result<()> {
     require!(
@@ -110,4 +129,21 @@ pub fn require_sufficient_lamports(account: &AccountInfo, required_lamports: u64
         GiveawayError::InsufficientFunds
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minimum_winners_pool_rejects_zero_lamport_winners() {
+        assert!(validate_minimum_winners_pool(1, 0, 2).is_err());
+        assert!(validate_minimum_winners_pool(2, 0, 2).is_ok());
+    }
+
+    #[test]
+    fn minimum_winners_pool_accounts_for_service_fee() {
+        assert!(validate_minimum_winners_pool(100, 9_900, 2).is_err());
+        assert!(validate_minimum_winners_pool(200, 9_900, 2).is_ok());
+    }
 }

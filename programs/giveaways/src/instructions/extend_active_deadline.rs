@@ -3,6 +3,10 @@
 //! Allows creator to extend the participation deadline before it passes.
 
 use crate::{
+    constants::{
+        MAX_ACTIVE_DURATION_SECS, MAX_UPLOAD_DURATION_SECS, MIN_ACTIVE_DURATION_SECS,
+        MIN_UPLOAD_DURATION_SECS,
+    },
     error::GiveawayError,
     state::{Config, Giveaway},
 };
@@ -41,9 +45,30 @@ pub fn process(ctx: Context<ExtendActiveDeadline>, new_deadline_unix: i64) -> Re
         new_deadline_unix > giveaway.active_deadline_unix,
         GiveawayError::CannotShorten
     );
+    let active_duration_secs = new_deadline_unix
+        .checked_sub(giveaway.active_start_unix)
+        .ok_or(GiveawayError::MathOverflow)?;
+    require!(
+        active_duration_secs >= i64::from(MIN_ACTIVE_DURATION_SECS)
+            && active_duration_secs <= i64::from(MAX_ACTIVE_DURATION_SECS),
+        GiveawayError::InvalidDuration
+    );
 
     // Calculate upload duration to maintain the same interval.
-    let upload_duration_secs = (giveaway.upload_deadline_unix - giveaway.upload_start_unix) as u32;
+    let upload_duration_i64 = giveaway
+        .upload_deadline_unix
+        .checked_sub(giveaway.upload_start_unix)
+        .ok_or(GiveawayError::MathOverflow)?;
+    require!(
+        upload_duration_i64 >= i64::from(MIN_UPLOAD_DURATION_SECS)
+            && upload_duration_i64 <= i64::from(MAX_UPLOAD_DURATION_SECS),
+        GiveawayError::InvalidDuration
+    );
+    let upload_duration_secs =
+        u32::try_from(upload_duration_i64).map_err(|_| GiveawayError::MathOverflow)?;
+    new_deadline_unix
+        .checked_add(i64::from(upload_duration_secs))
+        .ok_or(GiveawayError::MathOverflow)?;
 
     // Update deadlines
     giveaway.extend_active_deadline(new_deadline_unix, upload_duration_secs);

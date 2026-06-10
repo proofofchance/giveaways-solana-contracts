@@ -225,8 +225,12 @@ impl Giveaway {
     }
 
     /// Add a participant
-    pub fn add_participant(&mut self) {
-        self.participants_count += 1;
+    pub fn add_participant(&mut self) -> Result<()> {
+        self.participants_count = self
+            .participants_count
+            .checked_add(1)
+            .ok_or(crate::error::GiveawayError::MathOverflow)?;
+        Ok(())
     }
 
     /// Remove a participant (for disqualification)
@@ -237,16 +241,24 @@ impl Giveaway {
     }
 
     /// Add an attestation
-    pub fn add_attestation(&mut self) {
-        self.attested_count += 1;
+    pub fn add_attestation(&mut self) -> Result<()> {
+        self.attested_count = self
+            .attested_count
+            .checked_add(1)
+            .ok_or(crate::error::GiveawayError::MathOverflow)?;
+        Ok(())
     }
 
     /// Add uploaded reveals
-    pub fn add_uploaded_reveals(&mut self, count: u32, aggregate_hash: [u8; 32]) {
-        self.provider_uploaded_count += count;
+    pub fn add_uploaded_reveals(&mut self, count: u32, aggregate_hash: [u8; 32]) -> Result<()> {
+        self.provider_uploaded_count = self
+            .provider_uploaded_count
+            .checked_add(count)
+            .ok_or(crate::error::GiveawayError::MathOverflow)?;
         self.poc_aggregate_hash = aggregate_hash;
         self.uploads_complete =
             self.attested_count > 0 && self.provider_uploaded_count >= self.attested_count;
+        Ok(())
     }
 
     /// Returns true when some accepted/attested reveals have not yet been included.
@@ -283,14 +295,22 @@ impl Giveaway {
     }
 
     /// Disqualify a participant
-    pub fn disqualify_participant(&mut self) {
-        self.disqualified_count += 1;
+    pub fn disqualify_participant(&mut self) -> Result<()> {
+        self.disqualified_count = self
+            .disqualified_count
+            .checked_add(1)
+            .ok_or(crate::error::GiveawayError::MathOverflow)?;
+        Ok(())
     }
 
     /// Mark winners as computed
-    pub fn mark_winners_computed(&mut self) {
+    pub fn mark_winners_computed(&mut self) -> Result<()> {
         self.winners_computed = true;
-        self.recompute_version += 1;
+        self.recompute_version = self
+            .recompute_version
+            .checked_add(1)
+            .ok_or(crate::error::GiveawayError::MathOverflow)?;
+        Ok(())
     }
 
     /// Lock winners (prevent further changes)
@@ -331,7 +351,8 @@ impl Giveaway {
 
     /// Calculate service fee amount
     pub fn calculate_service_fee(&self) -> u64 {
-        (self.total_payout_lamports * self.service_fee_bps as u64) / 10000
+        ((u128::from(self.total_payout_lamports) * u128::from(self.service_fee_bps)) / 10_000u128)
+            as u64
     }
 
     /// Calculate the payout pool available to winners after service fee.
@@ -365,7 +386,80 @@ impl Giveaway {
         active_deadline_unix: i64,
         upload_duration_secs: u32,
     ) -> bool {
+        let active_duration_secs = active_deadline_unix.saturating_sub(active_start_unix);
         active_start_unix < active_deadline_unix
+            && active_duration_secs >= i64::from(MIN_ACTIVE_DURATION_SECS)
+            && active_duration_secs <= i64::from(MAX_ACTIVE_DURATION_SECS)
             && (MIN_UPLOAD_DURATION_SECS..=MAX_UPLOAD_DURATION_SECS).contains(&upload_duration_secs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_giveaway() -> Giveaway {
+        Giveaway {
+            id: 1,
+            config: Pubkey::new_unique(),
+            creator: Pubkey::new_unique(),
+            vault: Pubkey::new_unique(),
+            status: GiveawayStatus::Active,
+            total_payout_lamports: 0,
+            number_of_winners: 1,
+            service_fee_bps: 0,
+            created_at_unix: 0,
+            active_start_unix: 0,
+            active_deadline_unix: 0,
+            upload_start_unix: 0,
+            upload_deadline_unix: 0,
+            settlement_start_unix: 0,
+            participants_count: 0,
+            attested_count: 0,
+            provider_uploaded_count: 0,
+            poc_aggregate_hash: [0; 32],
+            uploads_complete: false,
+            disqualified_count: 0,
+            winners_computed: false,
+            winners_locked: false,
+            recompute_version: 0,
+            settled: false,
+            remediation_start_unix: 0,
+            remediation_deadline_unix: 0,
+            reserved: [0; 112],
+        }
+    }
+
+    #[test]
+    fn service_fee_uses_wide_arithmetic() {
+        let mut giveaway = test_giveaway();
+        giveaway.total_payout_lamports = u64::MAX;
+        giveaway.service_fee_bps = MAX_SERVICE_FEE_BPS;
+
+        assert_eq!(
+            giveaway.calculate_service_fee(),
+            ((u128::from(u64::MAX) * u128::from(MAX_SERVICE_FEE_BPS)) / 10_000u128) as u64
+        );
+    }
+
+    #[test]
+    fn timing_requires_active_duration_bounds() {
+        let start = 1_000;
+
+        assert!(Giveaway::validate_timing(
+            start,
+            start + i64::from(MIN_ACTIVE_DURATION_SECS),
+            MIN_UPLOAD_DURATION_SECS
+        ));
+        assert!(!Giveaway::validate_timing(
+            start,
+            start + i64::from(MIN_ACTIVE_DURATION_SECS) - 1,
+            MIN_UPLOAD_DURATION_SECS
+        ));
+        assert!(!Giveaway::validate_timing(
+            start,
+            start + i64::from(MAX_ACTIVE_DURATION_SECS) + 1,
+            MIN_UPLOAD_DURATION_SECS
+        ));
     }
 }

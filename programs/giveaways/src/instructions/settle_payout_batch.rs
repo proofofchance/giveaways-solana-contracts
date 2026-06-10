@@ -101,6 +101,10 @@ pub fn process<'info>(
             GiveawayError::InvalidBatch
         );
         require!(
+            winner_proof.amount >= MIN_WINNER_PAYOUT_LAMPORTS,
+            GiveawayError::InvalidBatch
+        );
+        require!(
             winners_ledger
                 .winner_wallets
                 .get(winner_proof.winner_index as usize)
@@ -143,11 +147,10 @@ pub fn process<'info>(
         transfer_lamports(vault, winner_account, winner_proof.amount)?;
 
         // Mark as paid
-        require!(
-            winners_ledger.mark_winner_paid(winner_proof.winner_index),
-            GiveawayError::AlreadyPaid
-        );
-        winners_paid_in_batch += 1;
+        winners_ledger.mark_winner_paid(winner_proof.winner_index)?;
+        winners_paid_in_batch = winners_paid_in_batch
+            .checked_add(1)
+            .ok_or(GiveawayError::MathOverflow)?;
 
         // Emit winner paid event
         crate::events::GiveawayEvent::WinnerPaid {
@@ -163,7 +166,7 @@ pub fn process<'info>(
     }
 
     // Mark batch as processed
-    winners_ledger.mark_batch_processed();
+    winners_ledger.mark_batch_processed()?;
 
     // Check if settlement is complete
     if winners_ledger.is_settlement_complete() {

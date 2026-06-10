@@ -75,7 +75,7 @@ pub fn process(
         );
 
         // Increment participant count
-        giveaway.add_participant();
+        giveaway.add_participant()?;
     }
 
     // Emit event

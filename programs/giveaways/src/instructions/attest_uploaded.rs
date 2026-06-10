@@ -78,7 +78,7 @@ pub fn process(ctx: Context<AttestUploaded>) -> Result<()> {
     participant_account.mark_attested(clock.unix_timestamp);
 
     // Update giveaway attestation count
-    giveaway.add_attestation();
+    giveaway.add_attestation()?;
 
     // Emit event
     crate::events::GiveawayEvent::AttestationSubmitted {

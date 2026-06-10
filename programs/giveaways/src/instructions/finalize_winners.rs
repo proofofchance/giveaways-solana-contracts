@@ -7,8 +7,11 @@ use crate::{
     constants::*,
     error::GiveawayError,
     events::GiveawayEvent,
-    state::{Config, Giveaway, Participant, WinnersLedger},
-    utils::crypto::{build_merkle_tree, compute_winner_seed, select_winners, WinnerEntry},
+    state::{Config, Giveaway, WinnersLedger},
+    utils::{
+        crypto::{build_merkle_tree, compute_winner_seed, select_winners, WinnerEntry},
+        participant_set::collect_canonical_eligible_wallets,
+    },
 };
 use anchor_lang::prelude::*;
 
@@ -91,38 +94,12 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
         giveaway.uploads_complete = true;
     }
 
-    // Collect all reveal-included participants. The count check prevents a
-    // caller from finalizing with only a subset of uploaded accounts.
-    let mut eligible_participants: Vec<Pubkey> = Vec::new();
-    let mut included_participants_count = 0u32;
-
-    for account_info in ctx.remaining_accounts.iter() {
-        let mut participant_data = &account_info.data.borrow()[..];
-        if let Ok(participant) = Participant::try_deserialize(&mut participant_data) {
-            require_keys_eq!(
-                participant.giveaway,
-                giveaway.key(),
-                GiveawayError::InvalidAccount
-            );
-
-            if participant.is_eligible() {
-                eligible_participants.push(participant.wallet);
-            }
-            if participant.reveal_included {
-                included_participants_count = included_participants_count
-                    .checked_add(1)
-                    .ok_or(GiveawayError::MathOverflow)?;
-            }
-        }
-    }
-
-    require_eq!(
-        included_participants_count,
+    let eligible_participants = collect_canonical_eligible_wallets(
+        ctx.program_id,
+        giveaway.key(),
         giveaway.provider_uploaded_count,
-        GiveawayError::MissingAttestedParticipants
-    );
-
-    eligible_participants.sort_by_key(|pubkey| pubkey.to_bytes());
+        ctx.remaining_accounts,
+    )?;
 
     let seed = compute_winner_seed(
         giveaway.id,
@@ -144,7 +121,10 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
 
     let winners_vec = select_winners(&seed, &eligible_participants, giveaway.number_of_winners);
     let actual_winners_count = winners_vec.len() as u32;
-    let next_recompute_version = giveaway.recompute_version + 1;
+    let next_recompute_version = giveaway
+        .recompute_version
+        .checked_add(1)
+        .ok_or(GiveawayError::MathOverflow)?;
 
     let winners_pool = giveaway.calculate_winners_pool();
     let per_winner_payout = if actual_winners_count > 0 {
@@ -152,7 +132,15 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
     } else {
         0
     };
-    let total_winners_payout = actual_winners_count as u64 * per_winner_payout;
+    if actual_winners_count > 0 {
+        require!(
+            per_winner_payout >= MIN_WINNER_PAYOUT_LAMPORTS,
+            GiveawayError::InsufficientFunds
+        );
+    }
+    let total_winners_payout = (actual_winners_count as u64)
+        .checked_mul(per_winner_payout)
+        .ok_or(GiveawayError::MathOverflow)?;
 
     let winners: Vec<WinnerEntry> = winners_vec
         .iter()
@@ -193,11 +181,11 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
             winners_vec.clone(),
             next_recompute_version,
             clock.unix_timestamp,
-        );
+        )?;
     }
 
     // Update giveaway state
-    giveaway.mark_winners_computed();
+    giveaway.mark_winners_computed()?;
 
     // Emit event
     crate::events::GiveawayEvent::WinnersComputed {

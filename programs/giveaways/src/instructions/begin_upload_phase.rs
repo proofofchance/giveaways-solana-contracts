@@ -35,7 +35,9 @@ pub fn process(ctx: Context<BeginUploadPhase>) -> Result<()> {
 
     // Set upload phase to start now with default duration.
     giveaway.upload_start_unix = now;
-    giveaway.upload_deadline_unix = now + config.default_upload_duration_secs as i64;
+    giveaway.upload_deadline_unix = now
+        .checked_add(i64::from(config.default_upload_duration_secs))
+        .ok_or(GiveawayError::MathOverflow)?;
 
     // Also update active deadline to now if it's in the future
     if giveaway.active_deadline_unix > now {

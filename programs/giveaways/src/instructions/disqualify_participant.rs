@@ -56,7 +56,7 @@ pub fn process(ctx: Context<DisqualifyParticipant>, reason_code: u8) -> Result<(
     participant_account.disqualify(reason_code, clock.unix_timestamp);
 
     // Update giveaway disqualification count
-    giveaway.disqualify_participant();
+    giveaway.disqualify_participant()?;
 
     // Emit event
     crate::events::GiveawayEvent::ParticipantDisqualified {

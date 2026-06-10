@@ -29,6 +29,9 @@ pub const MIN_WINNERS: u32 = 1;
 /// Maximum number of winners allowed per giveaway
 pub const MAX_WINNERS: u32 = 1000;
 
+/// Minimum amount a finalized winner must receive.
+pub const MIN_WINNER_PAYOUT_LAMPORTS: u64 = 1;
+
 /// Minimum active duration in seconds (1 hour)
 pub const MIN_ACTIVE_DURATION_SECS: u32 = 3600;
 

@@ -3,6 +3,7 @@
 //! The WinnersLedger account stores winner settlement data including
 //! merkle root, payout tracking, and batch processing state.
 
+use crate::error::GiveawayError;
 use anchor_lang::prelude::*;
 
 /// Winners settlement ledger
@@ -138,7 +139,11 @@ impl WinnersLedger {
         winner_wallets: Vec<Pubkey>,
         recompute_version: u32,
         current_time: i64,
-    ) {
+    ) -> Result<()> {
+        require!(
+            !self.locked && self.paid_count == 0 && self.settlement_started_at_unix == 0,
+            GiveawayError::InvalidInstruction
+        );
         self.merkle_root = merkle_root;
         self.winners_count = winners_count;
         self.total_payout_lamports = total_payout_lamports;
@@ -154,6 +159,7 @@ impl WinnersLedger {
         self.batches_processed = 0;
         self.settlement_started_at_unix = 0;
         self.settlement_completed_at_unix = 0;
+        Ok(())
     }
 
     /// Lock winners (prevent further recomputes)
@@ -186,33 +192,40 @@ impl WinnersLedger {
     }
 
     /// Mark a winner as paid
-    pub fn mark_winner_paid(&mut self, winner_index: u32) -> bool {
+    pub fn mark_winner_paid(&mut self, winner_index: u32) -> Result<()> {
         if winner_index >= self.winners_count {
-            return false;
+            return Err(GiveawayError::InvalidBatch.into());
         }
 
         let byte_index = (winner_index / 8) as usize;
         let bit_index = winner_index % 8;
 
         if byte_index >= self.paid_bitmap.len() {
-            return false;
+            return Err(GiveawayError::InvalidBatch.into());
         }
 
         // Check if already paid
         if (self.paid_bitmap[byte_index] & (1 << bit_index)) != 0 {
-            return false; // Already paid
+            return Err(GiveawayError::AlreadyPaid.into());
         }
 
         // Mark as paid
         self.paid_bitmap[byte_index] |= 1 << bit_index;
-        self.paid_count += 1;
+        self.paid_count = self
+            .paid_count
+            .checked_add(1)
+            .ok_or(GiveawayError::MathOverflow)?;
 
-        true
+        Ok(())
     }
 
     /// Mark a batch as processed
-    pub fn mark_batch_processed(&mut self) {
-        self.batches_processed += 1;
+    pub fn mark_batch_processed(&mut self) -> Result<()> {
+        self.batches_processed = self
+            .batches_processed
+            .checked_add(1)
+            .ok_or(GiveawayError::MathOverflow)?;
+        Ok(())
     }
 
     /// Check if settlement is complete
@@ -229,7 +242,7 @@ impl WinnersLedger {
 
     /// Get number of unpaid winners
     pub fn get_unpaid_count(&self) -> u32 {
-        self.winners_count - self.paid_count
+        self.winners_count.saturating_sub(self.paid_count)
     }
 
     /// Validate winner index
@@ -240,5 +253,64 @@ impl WinnersLedger {
     /// Get bitmap size in bytes
     pub fn get_bitmap_size(&self) -> usize {
         self.paid_bitmap.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ledger_with_winners(count: u32) -> WinnersLedger {
+        let mut ledger = WinnersLedger {
+            giveaway: Pubkey::new_unique(),
+            merkle_root: [1; 32],
+            winners_count: 0,
+            total_payout_lamports: 0,
+            per_winner_lamports: 0,
+            paid_bitmap: Vec::new(),
+            winner_wallets: Vec::new(),
+            paid_count: 0,
+            batches_processed: 0,
+            recompute_version: 0,
+            locked: false,
+            computed_at_unix: 0,
+            locked_at_unix: 0,
+            settlement_started_at_unix: 0,
+            settlement_completed_at_unix: 0,
+            reserved: [0; 128],
+        };
+        ledger.initialize(
+            Pubkey::new_unique(),
+            [2; 32],
+            count,
+            100,
+            10,
+            (0..count).map(|_| Pubkey::new_unique()).collect(),
+            1,
+            1,
+        );
+        ledger
+    }
+
+    #[test]
+    fn mark_winner_paid_rejects_duplicate_index() {
+        let mut ledger = ledger_with_winners(2);
+
+        ledger.mark_winner_paid(0).unwrap();
+
+        assert!(ledger.is_winner_paid(0));
+        assert_eq!(ledger.paid_count, 1);
+        assert!(ledger.mark_winner_paid(0).is_err());
+        assert_eq!(ledger.paid_count, 1);
+    }
+
+    #[test]
+    fn recompute_rejects_after_settlement_started() {
+        let mut ledger = ledger_with_winners(2);
+        ledger.start_settlement(100);
+
+        assert!(ledger
+            .recompute([3; 32], 1, 50, 50, vec![Pubkey::new_unique()], 2, 101)
+            .is_err());
     }
 }

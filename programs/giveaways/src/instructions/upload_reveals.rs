@@ -9,8 +9,11 @@ use crate::{
     constants::*,
     error::GiveawayError,
     state::{Config, Giveaway, Participant},
-    utils::crypto::{
-        build_reveal_plaintext, compute_reveal_digest, verify_reveal, xor_reveal_digests,
+    utils::{
+        crypto::{
+            build_reveal_plaintext, compute_reveal_digest, verify_reveal, xor_reveal_digests,
+        },
+        pda::assert_pda_owned,
     },
 };
 use anchor_lang::prelude::*;
@@ -117,12 +120,26 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
             participant_info.is_writable,
             GiveawayError::AccountNotWritable
         );
+        require_eq!(
+            participant_info.owner,
+            ctx.program_id,
+            GiveawayError::InvalidProgram
+        );
 
         // Deserialize participant account
         let mut participant_data = &participant_info.data.borrow()[..];
         let mut participant = Participant::try_deserialize(&mut participant_data)
             .map_err(|_| GiveawayError::AccountNotInitialized)?;
 
+        assert_pda_owned(
+            ctx.program_id,
+            participant_info,
+            &[
+                PARTICIPANT_SEED,
+                giveaway.key().as_ref(),
+                participant.wallet.as_ref(),
+            ],
+        )?;
         require_keys_eq!(
             participant.giveaway,
             giveaway.key(),
@@ -164,7 +181,7 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
 
     // Update giveaway reveal count
     let aggregate_hash = xor_reveal_digests(giveaway.poc_aggregate_hash, &reveal_digests);
-    giveaway.add_uploaded_reveals(valid_reveals, aggregate_hash);
+    giveaway.add_uploaded_reveals(valid_reveals, aggregate_hash)?;
     if giveaway.uploads_complete && giveaway.remediation_start_unix > 0 {
         crate::events::GiveawayEvent::RevealRemediationCompleted {
             giveaway_id: giveaway.id,
