@@ -3,7 +3,7 @@
   "description": "Giveaways Solana contracts workspace",
   "private": true,
   "scripts": {
-    "test": "mocha --timeout 120000 tests/**/*.js",
+    "test": "cargo test -p giveaways",
     "lint": "cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "lint:fix": "cargo fmt --all",
     "precommit": "npm run lint"
@@ -13,7 +13,7 @@
     "@solana/web3.js": "^1.98.4",
     "borsh": "^2.0.0"
   },
-  "devDependencies": {
-    "mocha": "^11.7.5"
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }
