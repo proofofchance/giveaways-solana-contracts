@@ -29,6 +29,7 @@
 //! - **Participant**: `["participant", giveaway_pubkey, wallet_pubkey]` - Participant data
 //! - **Vault**: `["vault", giveaway_pubkey]` - Fund custody account
 //! - **WinnersLedger**: `["winners_ledger", giveaway_pubkey]` - Winner settlement data
+//! - **FinalizationLedger**: `["finalization_ledger", giveaway_pubkey]` - Chunked winner candidate state
 //!
 //! ## Instruction Flow
 //!
@@ -37,9 +38,9 @@
 //! 3. **Participate**: Participants submit proof text and proof-of-chance hash
 //! 4. **AttestUploaded**: Participants attest to off-chain reveal upload
 //! 5. **UploadReveals**: Provider uploads batch of reveals for settlement
-//! 6. **FinalizeWinners**: Compute winners and store merkle commitment
+//! 6. **FinalizeWinners**: Process reveal-included participants in chunks and store merkle commitment when complete
 //! 7. **DisqualifyParticipant**: Creator can remove invalid entries (with audit trail)
-//! 8. **RecomputeWinners**: Recompute after disqualifications
+//! 8. **RecomputeWinners**: Legacy path disabled; eligibility changes happen before upload
 //! 9. **LockWinners**: Freeze winner set and enable settlement
 //! 10. **SettlePayoutBatch**: Pay winners in batches using merkle proofs
 //!
@@ -178,17 +179,19 @@ pub mod giveaways {
 
     /// Finalize winners and store merkle commitment
     ///
-    /// Determines winners using uploaded reveals and stores the merkle root
-    /// on-chain for batch settlement verification.
+    /// Processes a chunk of reveal-included participants. Once all included
+    /// reveals are processed, stores the winner merkle root on-chain for batch
+    /// settlement verification.
     ///
     /// Accounts expected:
     /// 0. `[]` Config account
     /// 1. `[writable]` Giveaway account
     /// 2. `[writable]` Vault account
     /// 3. `[writable]` WinnersLedger account (PDA: ["winners_ledger", giveaway])
-    /// 4. `[signer]` Authority
-    /// 5. `[]` System program
-    /// 6..N. `[]` All participant accounts
+    /// 4. `[writable]` FinalizationLedger account (PDA: ["finalization_ledger", giveaway])
+    /// 5. `[signer]` Authority
+    /// 6. `[]` System program
+    /// 7..N. `[writable]` Reveal-included participant accounts for this chunk
     pub fn finalize_winners(ctx: Context<FinalizeWinners>) -> Result<()> {
         instructions::finalize_winners::process(ctx)
     }
@@ -212,8 +215,8 @@ pub mod giveaways {
 
     /// Recompute winners after disqualifications
     ///
-    /// Can be called multiple times until winners are locked.
-    /// Uses same deterministic algorithm with current eligible participants.
+    /// Disabled in the scalable finalization protocol. Disqualifications happen
+    /// before upload; `finalize_winners` processes the resulting eligible set in chunks.
     ///
     /// Accounts expected:
     /// 0. `[]` Config account

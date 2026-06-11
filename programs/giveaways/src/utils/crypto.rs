@@ -80,6 +80,24 @@ pub fn compute_winner_seed(
     seed
 }
 
+/// Compute the base seed used by chunked top-K finalization.
+pub fn compute_finalization_seed(giveaway_id: u64, aggregate_hash: [u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GIVEAWAY_FINALIZATION_SEED_DOMAIN_V2);
+    hasher.update(giveaway_id.to_le_bytes());
+    hasher.update(aggregate_hash);
+    hasher.finalize().into()
+}
+
+/// Compute one participant's deterministic ranking key.
+pub fn compute_candidate_rank(seed: &[u8; 32], participant: &Pubkey) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GIVEAWAY_RANK_DOMAIN_V2);
+    hasher.update(seed);
+    hasher.update(participant.to_bytes());
+    hasher.finalize().into()
+}
+
 /// Select winners without replacement from a wallet-sorted eligible pool.
 pub fn select_winners(
     seed: &[u8; 32],
@@ -253,6 +271,17 @@ mod tests {
             .copied()
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(unique.len(), winners_a.len());
+    }
+
+    #[test]
+    fn candidate_rank_is_deterministic_and_wallet_specific() {
+        let wallet_a = Pubkey::new_unique();
+        let wallet_b = Pubkey::new_unique();
+        let seed = compute_finalization_seed(1, [3u8; 32]);
+
+        let rank_a = compute_candidate_rank(&seed, &wallet_a);
+        assert_eq!(rank_a, compute_candidate_rank(&seed, &wallet_a));
+        assert_ne!(rank_a, compute_candidate_rank(&seed, &wallet_b));
     }
 
     #[test]

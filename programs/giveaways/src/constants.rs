@@ -72,6 +72,9 @@ pub const GIVEAWAY_REVEAL_DOMAIN_V1: &[u8] = b"GIVEAWAY_REVEAL_V1";
 pub const GIVEAWAY_SEED_DOMAIN_V1: &[u8] = b"GIVEAWAY_SEED_V1";
 pub const GIVEAWAY_DRAW_DOMAIN_V1: &[u8] = b"GIVEAWAY_DRAW_V1";
 pub const GIVEAWAY_RULE_VERSION_V1: &str = "giveaway-poc-v1";
+pub const GIVEAWAY_FINALIZATION_SEED_DOMAIN_V2: &[u8] = b"GIVEAWAY_FINALIZE_SEED_V2";
+pub const GIVEAWAY_RANK_DOMAIN_V2: &[u8] = b"GIVEAWAY_RANK_V2";
+pub const GIVEAWAY_RULE_VERSION_V2: &str = "giveaway-poc-rank-v2";
 
 // PDA Seeds
 pub const CONFIG_SEED: &[u8] = b"config";
@@ -79,6 +82,7 @@ pub const GIVEAWAY_SEED: &[u8] = b"giveaway";
 pub const PARTICIPANT_SEED: &[u8] = b"participant";
 pub const VAULT_SEED: &[u8] = b"vault";
 pub const WINNERS_LEDGER_SEED: &[u8] = b"winners_ledger";
+pub const FINALIZATION_LEDGER_SEED: &[u8] = b"finalization_ledger";
 
 /// Disqualification reason codes
 pub mod disqualification_reasons {

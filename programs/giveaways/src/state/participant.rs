@@ -56,6 +56,9 @@ pub struct Participant {
 }
 
 impl Participant {
+    const FINALIZATION_VERSION_OFFSET: usize = 0;
+    const FINALIZATION_VERSION_LEN: usize = 4;
+
     /// Maximum size of Participant account in bytes
     pub const MAX_SIZE: usize = 8 + // discriminator
         32 +  // giveaway
@@ -127,6 +130,22 @@ impl Participant {
     /// Check if participant is eligible for winner selection
     pub fn is_eligible(&self) -> bool {
         !self.disqualified && self.reveal_included
+    }
+
+    pub fn finalization_version(&self) -> u32 {
+        let mut bytes = [0u8; Self::FINALIZATION_VERSION_LEN];
+        bytes.copy_from_slice(
+            &self.reserved[Self::FINALIZATION_VERSION_OFFSET
+                ..Self::FINALIZATION_VERSION_OFFSET + Self::FINALIZATION_VERSION_LEN],
+        );
+        u32::from_le_bytes(bytes)
+    }
+
+    pub fn mark_finalized_for_version(&mut self, recompute_version: u32, current_time: i64) {
+        self.reserved[Self::FINALIZATION_VERSION_OFFSET
+            ..Self::FINALIZATION_VERSION_OFFSET + Self::FINALIZATION_VERSION_LEN]
+            .copy_from_slice(&recompute_version.to_le_bytes());
+        self.last_updated_unix = current_time;
     }
 
     /// Validate proof text length

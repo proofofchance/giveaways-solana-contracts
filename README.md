@@ -31,8 +31,13 @@ Notes:
   `lucky_words || 0x1f || salt`.
 - Winner finalization validates every supplied participant account as a program
   owned PDA derived from `["participant", giveaway, wallet]`, rejects duplicate
-  account keys or wallets, and only computes winners from the canonical
-  reveal-included set.
+  account keys or wallets, and processes the canonical reveal-included set in
+  chunks through `FinalizationLedger`. Each chunk marks participant finalization
+  inclusion, and the final chunk writes the normal `WinnersLedger` payout
+  commitment.
+- Winner selection uses deterministic top-K ranking from the final reveal
+  aggregate, giveaway id, and participant wallet. This keeps large/open
+  giveaways fair without requiring every participant account in one transaction.
 - Giveaway creation rejects active windows outside the on-chain min/max bounds
   and rejects prize pools that cannot pay at least one lamport to every
   requested winner after the service fee snapshot.
