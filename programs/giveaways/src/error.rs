@@ -135,4 +135,7 @@ pub enum GiveawayError {
 
     #[msg("Invalid reason code: Disqualification reason code is invalid")]
     InvalidReasonCode,
+
+    #[msg("Early upload disabled: Build must enable the allow-early-upload feature")]
+    EarlyUploadDisabled,
 }

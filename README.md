@@ -37,7 +37,7 @@ Notes:
   and rejects prize pools that cannot pay at least one lamport to every
   requested winner after the service fee snapshot.
 - The authority-only `begin-giveaway-upload` fast-track is an intentional
-  operational feature. It lets the authority end participation early and start
-  the upload phase before the configured active deadline when a giveaway should
-  be closed manually.
+  staging/testing feature. It lets the authority end participation early and
+  start the upload phase before the configured active deadline, but only when
+  the program is built with the `allow-early-upload` Cargo feature.
 - Secrets are no longer stored inside this workspace.

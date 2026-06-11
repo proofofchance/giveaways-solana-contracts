@@ -11,6 +11,7 @@ crate-type = ["cdylib", "lib"]
 name = "giveaways"
 
 [features]
+allow-early-upload = []
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
