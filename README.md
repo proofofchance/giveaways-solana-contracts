@@ -36,7 +36,8 @@ Notes:
 - Giveaway creation rejects active windows outside the on-chain min/max bounds
   and rejects prize pools that cannot pay at least one lamport to every
   requested winner after the service fee snapshot.
-- The authority-only `begin-giveaway-upload` fast-track remains an operational
-  trust boundary. Use it only for deliberate early upload starts; otherwise let
-  the configured active deadline open the upload phase.
+- The authority-only `begin-giveaway-upload` fast-track is an intentional
+  operational feature. It lets the authority end participation early and start
+  the upload phase before the configured active deadline when a giveaway should
+  be closed manually.
 - Secrets are no longer stored inside this workspace.
