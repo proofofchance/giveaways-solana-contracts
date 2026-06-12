@@ -75,13 +75,13 @@ pub struct Giveaway {
     pub settlement_start_unix: i64,
 
     /// Total number of participants
-    pub participants_count: u32,
+    pub participants_count: u64,
 
     /// Number of participants who attested upload
-    pub attested_count: u32,
+    pub attested_count: u64,
 
     /// Number of reveals uploaded by provider
-    pub provider_uploaded_count: u32,
+    pub provider_uploaded_count: u64,
 
     /// Aggregate hash of uploaded reveals, used as the deterministic entropy base
     pub poc_aggregate_hash: [u8; 32],
@@ -90,7 +90,7 @@ pub struct Giveaway {
     pub uploads_complete: bool,
 
     /// Number of disqualified participants
-    pub disqualified_count: u32,
+    pub disqualified_count: u64,
 
     /// Whether winners have been computed
     pub winners_computed: bool,
@@ -131,12 +131,12 @@ impl Giveaway {
         8 +   // upload_start_unix
         8 +   // upload_deadline_unix
         8 +   // settlement_start_unix
-        4 +   // participants_count
-        4 +   // attested_count
-        4 +   // provider_uploaded_count
+        8 +   // participants_count
+        8 +   // attested_count
+        8 +   // provider_uploaded_count
         32 +  // poc_aggregate_hash
         1 +   // uploads_complete
-        4 +   // disqualified_count
+        8 +   // disqualified_count
         1 +   // winners_computed
         1 +   // winners_locked
         4 +   // recompute_version
@@ -250,7 +250,7 @@ impl Giveaway {
     }
 
     /// Add uploaded reveals
-    pub fn add_uploaded_reveals(&mut self, count: u32, aggregate_hash: [u8; 32]) -> Result<()> {
+    pub fn add_uploaded_reveals(&mut self, count: u64, aggregate_hash: [u8; 32]) -> Result<()> {
         self.provider_uploaded_count = self
             .provider_uploaded_count
             .checked_add(count)
@@ -368,7 +368,7 @@ impl Giveaway {
     }
 
     /// Get eligible participants count (not disqualified)
-    pub fn get_eligible_participants_count(&self) -> u32 {
+    pub fn get_eligible_participants_count(&self) -> u64 {
         self.participants_count
             .saturating_sub(self.disqualified_count)
     }

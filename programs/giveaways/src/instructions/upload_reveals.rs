@@ -92,7 +92,7 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
     );
     require!(!giveaway.winners_computed, GiveawayError::WinnersLocked);
 
-    let mut valid_reveals = 0u32;
+    let mut valid_reveals = 0u64;
     let mut reveal_digests = Vec::with_capacity(reveals.len());
     let mut seen = std::collections::HashSet::new();
 
@@ -176,7 +176,9 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
         let mut writer = Cursor::new(&mut account_data[..]);
         participant.try_serialize(&mut writer)?;
 
-        valid_reveals += 1;
+        valid_reveals = valid_reveals
+            .checked_add(1)
+            .ok_or(GiveawayError::MathOverflow)?;
     }
 
     // Update giveaway reveal count
@@ -198,7 +200,7 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
         giveaway_id: giveaway.id,
         giveaway: giveaway.key().to_string(),
         authority: uploader.key().to_string(),
-        batch_size: valid_reveals,
+        batch_size: u32::try_from(valid_reveals).map_err(|_| GiveawayError::MathOverflow)?,
         total_reveals_uploaded: giveaway.provider_uploaded_count,
         total_attested: giveaway.attested_count,
         aggregate_hash: hex::encode(aggregate_hash),

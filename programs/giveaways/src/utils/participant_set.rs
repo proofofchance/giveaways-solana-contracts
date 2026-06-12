@@ -13,12 +13,12 @@ use anchor_lang::prelude::*;
 pub fn collect_canonical_eligible_wallets<'info>(
     program_id: &Pubkey,
     giveaway: Pubkey,
-    expected_included_reveals: u32,
+    expected_included_reveals: u64,
     remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<Vec<Pubkey>> {
     let mut seen_accounts = HashSet::new();
     let mut seen_wallets = HashSet::new();
-    let mut included_reveals = 0u32;
+    let mut included_reveals = 0u64;
     let mut eligible_wallets = Vec::new();
 
     for account_info in remaining_accounts.iter() {

@@ -27,8 +27,8 @@ pub struct FinalizationLedger {
     pub giveaway: Pubkey,
     pub recompute_version: u32,
     pub target_winners: u32,
-    pub processed_count: u32,
-    pub eligible_count: u32,
+    pub processed_count: u64,
+    pub eligible_count: u64,
     pub seed: [u8; 32],
     pub candidates: Vec<RankedCandidate>,
     pub completed: bool,
@@ -42,8 +42,8 @@ impl FinalizationLedger {
         32 + // giveaway
         4 + // recompute_version
         4 + // target_winners
-        4 + // processed_count
-        4 + // eligible_count
+        8 + // processed_count
+        8 + // eligible_count
         32 + // seed
         4 + // candidates vec length prefix
         1 + // completed
