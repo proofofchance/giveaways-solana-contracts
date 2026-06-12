@@ -196,4 +196,33 @@ mod tests {
         assert_eq!(winners[1], wallet_mid);
         assert!(!winners.contains(&wallet_high));
     }
+
+    #[test]
+    fn finalization_progress_counters_support_u64_scale() {
+        let giveaway = Pubkey::new_unique();
+        let mut ledger = FinalizationLedger {
+            giveaway: Pubkey::default(),
+            recompute_version: 0,
+            target_winners: 0,
+            processed_count: u64::from(u32::MAX),
+            eligible_count: u64::from(u32::MAX),
+            seed: [0; 32],
+            candidates: Vec::new(),
+            completed: false,
+            started_at_unix: 0,
+            completed_at_unix: 0,
+            reserved: [0; 64],
+        };
+        ledger.initialize(giveaway, 1, 2, [9; 32], 100);
+        ledger.processed_count = u64::from(u32::MAX);
+        ledger.eligible_count = u64::from(u32::MAX);
+
+        ledger.record_processed().unwrap();
+        ledger
+            .record_eligible(Pubkey::new_unique(), [1; 32])
+            .unwrap();
+
+        assert_eq!(ledger.processed_count, u64::from(u32::MAX) + 1);
+        assert_eq!(ledger.eligible_count, u64::from(u32::MAX) + 1);
+    }
 }

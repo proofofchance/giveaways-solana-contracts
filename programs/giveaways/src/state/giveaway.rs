@@ -462,4 +462,29 @@ mod tests {
             MIN_UPLOAD_DURATION_SECS
         ));
     }
+
+    #[test]
+    fn participant_progress_counters_support_u64_scale() {
+        let mut giveaway = test_giveaway();
+        let beyond_u32 = u64::from(u32::MAX) + 1;
+
+        giveaway.participants_count = u64::from(u32::MAX);
+        giveaway.add_participant().unwrap();
+        assert_eq!(giveaway.participants_count, beyond_u32);
+
+        giveaway.attested_count = u64::from(u32::MAX);
+        giveaway.add_attestation().unwrap();
+        assert_eq!(giveaway.attested_count, beyond_u32);
+
+        giveaway.provider_uploaded_count = u64::from(u32::MAX);
+        giveaway
+            .add_uploaded_reveals(2, [7u8; 32])
+            .expect("wide reveal counts should not be capped at u32");
+        assert_eq!(giveaway.provider_uploaded_count, beyond_u32 + 1);
+
+        giveaway.disqualified_count = u64::from(u32::MAX);
+        giveaway.disqualify_participant().unwrap();
+        assert_eq!(giveaway.disqualified_count, beyond_u32);
+        assert_eq!(giveaway.get_eligible_participants_count(), 0);
+    }
 }
