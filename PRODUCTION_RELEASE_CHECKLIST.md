@@ -98,4 +98,6 @@ verify the upgrade authority immediately after deployment.
 - Winner selection uses deterministic top-K ranking from the final reveal seed.
 - Service fee is snapshotted on each giveaway at creation.
 - Zero-winner/no-attester/no-participant paths refund the creator from the vault.
+- Giveaway accounts include an explicit layout version and reserved tail bytes
+  before the first production deployment.
 - Production builds omit the early-upload feature.

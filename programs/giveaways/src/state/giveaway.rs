@@ -6,6 +6,9 @@
 use crate::constants::*;
 use anchor_lang::prelude::*;
 
+/// Current serialized Giveaway account layout version.
+pub const GIVEAWAY_ACCOUNT_VERSION: u16 = 1;
+
 /// Status of a giveaway instance
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GiveawayStatus {
@@ -110,8 +113,11 @@ pub struct Giveaway {
     /// When omitted-reveal remediation expires (0 if not active/needed)
     pub remediation_deadline_unix: i64,
 
+    /// Serialized account layout version for controlled upgrades.
+    pub account_version: u16,
+
     /// Reserved space for future fields
-    pub reserved: [u8; 112],
+    pub reserved: [u8; 110],
 }
 
 impl Giveaway {
@@ -143,7 +149,8 @@ impl Giveaway {
         1 +   // settled
         8 +   // remediation_start_unix
         8 +   // remediation_deadline_unix
-        112; // reserved
+        2 +   // account_version
+        110; // reserved
 
     /// Initialize a new giveaway
     #[allow(clippy::too_many_arguments)]
@@ -187,7 +194,8 @@ impl Giveaway {
         self.settled = false;
         self.remediation_start_unix = 0;
         self.remediation_deadline_unix = 0;
-        self.reserved = [0; 112];
+        self.account_version = GIVEAWAY_ACCOUNT_VERSION;
+        self.reserved = [0; 110];
     }
 
     /// Check if giveaway is in active phase (accepting participation)
@@ -426,7 +434,8 @@ mod tests {
             settled: false,
             remediation_start_unix: 0,
             remediation_deadline_unix: 0,
-            reserved: [0; 112],
+            account_version: GIVEAWAY_ACCOUNT_VERSION,
+            reserved: [0; 110],
         }
     }
 
@@ -461,6 +470,27 @@ mod tests {
             start + i64::from(MAX_ACTIVE_DURATION_SECS) + 1,
             MIN_UPLOAD_DURATION_SECS
         ));
+    }
+
+    #[test]
+    fn initialized_giveaway_has_layout_version() {
+        let mut giveaway = test_giveaway();
+        giveaway.initialize(
+            7,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            1_000_000,
+            1,
+            500,
+            1_000,
+            2_000,
+            MIN_UPLOAD_DURATION_SECS,
+            900,
+        );
+
+        assert_eq!(giveaway.account_version, GIVEAWAY_ACCOUNT_VERSION);
+        assert_eq!(giveaway.reserved, [0; 110]);
     }
 
     #[test]

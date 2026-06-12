@@ -42,6 +42,9 @@ Notes:
 - Winner selection uses deterministic top-K ranking from the final reveal
   aggregate, giveaway id, and participant wallet. This keeps large/open
   giveaways fair without requiring every participant account in one transaction.
+- Giveaway accounts include an explicit layout version and reserved bytes so
+  future controlled upgrades can add fields without immediately changing the
+  serialized account size.
 - Giveaway creation rejects active windows outside the on-chain min/max bounds
   and rejects prize pools that cannot pay at least one lamport to every
   requested winner after the service fee snapshot.
