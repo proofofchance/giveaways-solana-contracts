@@ -12,6 +12,8 @@ state for production builds.
 - Deployed program id, programdata address, deployment slot, and deploy
   signature.
 - Verified source result from `solana-verify verify-from-repo`.
+- Any required The Ark database migrations applied before the upgraded program
+  is activated.
 - On-chain upgrade authority pubkey after deployment.
 - The Ark deployment manifest and runtime env snapshot refreshed from the
   deployed program metadata.
@@ -48,6 +50,11 @@ state for production builds.
    ```bash
    make giveaways-contracts.check-verified-deploy-prereqs ENV=mainnet
    ```
+
+5. If this release changes account layouts or indexed event counter widths,
+   deploy the matching The Ark migration before users rely on the upgraded
+   program. The wide-counter giveaway ABI requires
+   `the-ark-pg/db/migrations/0013_giveaway_wide_counters.sql`.
 
 ## Deploy
 
