@@ -8,6 +8,10 @@ Operational files live at the repo root:
 - scripts: `solana-scripts/giveaways/`
 - secrets and env: root `.env` plus root `.secrets/`
 
+Production release checklist:
+
+- [PRODUCTION_RELEASE_CHECKLIST.md](PRODUCTION_RELEASE_CHECKLIST.md)
+
 Use the root Make targets for build, deploy, and workflow commands. The main
 ones are:
 
