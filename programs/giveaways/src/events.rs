@@ -177,6 +177,14 @@ pub enum GiveawayEvent {
         total_paid_lamports: u64,
         timestamp: i64,
     },
+    ParticipantClosed {
+        giveaway_id: u64,
+        giveaway: String,
+        participant: String,
+        participant_account: String,
+        rent_reclaimed: u64,
+        timestamp: i64,
+    },
 }
 
 impl GiveawayEvent {

@@ -1,16 +1,18 @@
-//! # Finalize Winners Instruction
-//!
-//! Computes winners using uploaded reveals and stores merkle commitment
-//! for batch settlement verification.
+//! Permissionless fixed-account radix-threshold winner finalization.
 
 use crate::{
     constants::*,
     error::GiveawayError,
     events::GiveawayEvent,
-    state::{Config, FinalizationLedger, Giveaway, Participant, WinnersLedger},
+    state::{
+        Config, FinalizationLedger, Giveaway, Participant, WinnersLedger,
+        FINALIZATION_PROTOCOL_VERSION, PHASE_AGGREGATING, PHASE_COMPLETED, PHASE_RADIX,
+        PHASE_RESOLVING,
+    },
     utils::{
         crypto::{
-            build_merkle_tree, compute_candidate_rank, compute_finalization_seed, WinnerEntry,
+            compute_candidate_key, compute_finalization_seed_v2,
+            compute_participant_commitment_leaf, compute_threshold_commitment,
         },
         pda::assert_pda_owned,
     },
@@ -22,313 +24,326 @@ use std::io::Cursor;
 pub struct FinalizeWinners<'info> {
     #[account()]
     pub config: Account<'info, Config>,
-
-    #[account(
-        mut,
-        constraint = !giveaway.settled @ GiveawayError::GiveawayAlreadySettled,
-        constraint = !giveaway.winners_locked @ GiveawayError::WinnersLocked,
-    )]
+    #[account(mut, constraint = !giveaway.settled @ GiveawayError::GiveawayAlreadySettled,
+        constraint = !giveaway.winners_locked @ GiveawayError::WinnersLocked)]
     pub giveaway: Account<'info, Giveaway>,
-
-    /// CHECK: Vault account for validation
-    #[account(
-        constraint = vault.key() == giveaway.vault @ GiveawayError::InvalidAccount
-    )]
+    /// CHECK: Validated against the giveaway vault.
+    #[account(constraint = vault.key() == giveaway.vault @ GiveawayError::InvalidAccount)]
     pub vault: AccountInfo<'info>,
-
-    #[account(
-        init_if_needed,
-        payer = authority,
-        space = WinnersLedger::calculate_size(giveaway.number_of_winners),
-        seeds = [WINNERS_LEDGER_SEED, giveaway.key().as_ref()],
-        bump
-    )]
+    #[account(init_if_needed, payer = authority, space = WinnersLedger::SIZE,
+        seeds = [WINNERS_LEDGER_SEED, giveaway.key().as_ref()], bump)]
     pub winners_ledger: Account<'info, WinnersLedger>,
-
-    #[account(
-        init_if_needed,
-        payer = authority,
-        space = FinalizationLedger::calculate_size(giveaway.number_of_winners),
-        seeds = [FINALIZATION_LEDGER_SEED, giveaway.key().as_ref()],
-        bump
-    )]
-    pub finalization_ledger: Account<'info, FinalizationLedger>,
-
-    #[account(
-        mut,
-        constraint = authority.key() == config.authority @ GiveawayError::Unauthorized
-    )]
+    #[account(init_if_needed, payer = authority, space = FinalizationLedger::SIZE,
+        seeds = [FINALIZATION_LEDGER_SEED, giveaway.key().as_ref()], bump)]
+    pub finalization_ledger: AccountLoader<'info, FinalizationLedger>,
+    /// Any signer may fund creation of the fixed protocol accounts.
+    #[account(mut)]
     pub authority: Signer<'info>,
-
     pub system_program: Program<'info, System>,
 }
 
 pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
     let accounts = ctx.accounts;
-    let _config = &accounts.config;
     let giveaway = &mut accounts.giveaway;
-    let winners_ledger = &mut accounts.winners_ledger;
-    let finalization_ledger = &mut accounts.finalization_ledger;
+    let root_key = accounts.finalization_ledger.key();
+    let root_uninitialized = {
+        let root_info = accounts.finalization_ledger.to_account_info();
+        let data = root_info.data.borrow();
+        data[..8].iter().all(|byte| *byte == 0)
+    };
+    let mut root_data = if root_uninitialized {
+        accounts.finalization_ledger.load_init()?
+    } else {
+        accounts.finalization_ledger.load_mut()?
+    };
+    let root = &mut *root_data;
     let clock = Clock::get()?;
     let giveaway_key = giveaway.key();
 
-    // Validate settlement is ready
     require!(
         giveaway.is_ready_for_settlement(clock.unix_timestamp),
         GiveawayError::SettlementNotReady
     );
-
     require!(
         giveaway.attested_count > 0,
         GiveawayError::NoEligibleParticipants
     );
-
-    if giveaway.has_missing_attested_reveals() {
-        if clock.unix_timestamp >= giveaway.upload_deadline_unix
-            && giveaway.remediation_start_unix == 0
-        {
-            giveaway.begin_remediation(clock.unix_timestamp);
-            GiveawayEvent::RevealRemediationBegan {
-                giveaway_id: giveaway.id,
-                giveaway: giveaway.key().to_string(),
-                included_reveals_count: giveaway.provider_uploaded_count,
-                attested_count: giveaway.attested_count,
-                remediation_start_unix: giveaway.remediation_start_unix,
-                remediation_deadline_unix: giveaway.remediation_deadline_unix,
-                timestamp: clock.unix_timestamp,
-            }
-            .emit();
-            return Ok(());
-        }
-
-        return Err(GiveawayError::MissingAttestedParticipants.into());
+    if handle_missing_reveals(giveaway, clock.unix_timestamp)? {
+        return Ok(());
     }
-
-    if giveaway.attested_reveals_complete() && !giveaway.uploads_complete {
+    if giveaway.attested_reveals_complete() {
         giveaway.uploads_complete = true;
     }
 
-    let next_recompute_version = giveaway
+    let generation = giveaway
         .recompute_version
         .checked_add(1)
         .ok_or(GiveawayError::MathOverflow)?;
-
-    if finalization_ledger.giveaway == Pubkey::default() {
-        finalization_ledger.initialize(
+    if root.giveaway == Pubkey::default() {
+        root.initialize(
             giveaway_key,
-            next_recompute_version,
-            giveaway.number_of_winners,
-            compute_finalization_seed(giveaway.id, giveaway.poc_aggregate_hash),
+            generation,
+            giveaway.provider_uploaded_count,
             clock.unix_timestamp,
         );
     } else {
-        require_keys_eq!(
-            finalization_ledger.giveaway,
-            giveaway_key,
+        require_keys_eq!(root.giveaway, giveaway_key, GiveawayError::InvalidAccount);
+        require_eq!(
+            root.protocol_version,
+            FINALIZATION_PROTOCOL_VERSION,
             GiveawayError::InvalidAccount
         );
-        require!(
-            finalization_ledger.recompute_version == next_recompute_version,
+        require_eq!(
+            root.recompute_version,
+            generation,
             GiveawayError::InvalidInstruction
         );
-        require!(!finalization_ledger.completed, GiveawayError::WinnersLocked);
+        require_eq!(
+            root.required_count,
+            giveaway.provider_uploaded_count,
+            GiveawayError::InvalidInstruction
+        );
+        if root.completed != 0 {
+            return Ok(());
+        }
     }
-
     require!(
         !ctx.remaining_accounts.is_empty(),
         GiveawayError::InvalidInstruction
     );
 
-    let mut seen_accounts = std::collections::HashSet::new();
-    let mut seen_wallets = std::collections::HashSet::new();
-    let mut processed_in_batch = 0u32;
+    let mut batch_size = 0u32;
     for participant_info in ctx.remaining_accounts.iter() {
-        require!(
-            participant_info.is_writable,
-            GiveawayError::AccountNotWritable
-        );
-        require_eq!(
-            participant_info.owner,
-            ctx.program_id,
-            GiveawayError::InvalidProgram
-        );
-        require!(
-            seen_accounts.insert(participant_info.key()),
-            GiveawayError::InvalidAccount
-        );
-
-        let mut participant_data = &participant_info.data.borrow()[..];
-        let mut participant = Participant::try_deserialize(&mut participant_data)
-            .map_err(|_| GiveawayError::AccountNotInitialized)?;
-
-        require_keys_eq!(
-            participant.giveaway,
-            giveaway_key,
-            GiveawayError::InvalidAccount
-        );
-        assert_pda_owned(
-            ctx.program_id,
-            participant_info,
-            &[
-                PARTICIPANT_SEED,
-                giveaway_key.as_ref(),
-                participant.wallet.as_ref(),
-            ],
-        )?;
-        require!(
-            seen_wallets.insert(participant.wallet),
-            GiveawayError::InvalidAccount
-        );
-        require!(participant.reveal_included, GiveawayError::InvalidAccount);
-        require!(
-            participant.finalization_version() != finalization_ledger.recompute_version,
-            GiveawayError::InvalidAccount
-        );
-
-        finalization_ledger.record_processed()?;
-        processed_in_batch = processed_in_batch
+        let mut participant = load_participant(ctx.program_id, participant_info, &giveaway_key)?;
+        match root.phase {
+            PHASE_AGGREGATING => process_aggregation(root, &mut participant)?,
+            PHASE_RADIX => process_radix(root, &mut participant)?,
+            PHASE_RESOLVING => process_resolution(root, &mut participant)?,
+            PHASE_COMPLETED => return err!(GiveawayError::WinnersLocked),
+            _ => return err!(GiveawayError::InvalidAccount),
+        }
+        participant.last_updated_unix = clock.unix_timestamp;
+        store_participant(participant_info, &participant)?;
+        root.record_processed()?;
+        batch_size = batch_size
             .checked_add(1)
             .ok_or(GiveawayError::MathOverflow)?;
-
-        if participant.is_eligible() {
-            let rank = compute_candidate_rank(&finalization_ledger.seed, &participant.wallet);
-            finalization_ledger.record_eligible(participant.wallet, rank)?;
-        }
-
-        participant.mark_finalized_for_version(
-            finalization_ledger.recompute_version,
-            clock.unix_timestamp,
-        );
-        let mut account_data = participant_info.data.borrow_mut();
-        account_data.fill(0);
-        let mut writer = Cursor::new(&mut account_data[..]);
-        participant.try_serialize(&mut writer)?;
     }
-
     require!(
-        finalization_ledger.processed_count <= giveaway.provider_uploaded_count,
+        root.processed_count <= root.required_count,
         GiveawayError::InvalidInstruction
     );
 
-    let completed = finalization_ledger.processed_count == giveaway.provider_uploaded_count;
-    if completed {
-        finalization_ledger.complete(clock.unix_timestamp);
-
-        let winners_vec = finalization_ledger.winner_wallets();
-        let actual_winners_count = winners_vec.len() as u32;
-
-        if winners_vec.is_empty() {
-            crate::events::GiveawayEvent::NoWinners {
-                giveaway_id: giveaway.id,
-                giveaway: giveaway_key.to_string(),
-                reason: "no_eligible_participants".to_string(),
-                total_participants: giveaway.participants_count,
-                total_attested: giveaway.attested_count,
-                timestamp: clock.unix_timestamp,
+    let mut completed = false;
+    if root.processed_count == root.required_count {
+        match root.phase {
+            PHASE_AGGREGATING => {
+                let target = u64::from(giveaway.number_of_winners).min(root.eligible_count) as u32;
+                if target == 0 {
+                    root.target_winners = 0;
+                    root.complete(clock.unix_timestamp);
+                    completed = true;
+                } else {
+                    let seed = compute_finalization_seed_v2(
+                        giveaway.id,
+                        giveaway.poc_aggregate_hash,
+                        root.eligible_count,
+                        root.participants_commitment,
+                    );
+                    root.begin_radix(seed, target);
+                }
             }
-            .emit();
+            PHASE_RADIX => root.finish_radix_pass()?,
+            PHASE_RESOLVING => {
+                require!(
+                    root.threshold_found != 0,
+                    GiveawayError::NoEligibleParticipants
+                );
+                root.complete(clock.unix_timestamp);
+                completed = true;
+            }
+            _ => {}
         }
+    }
 
-        let winners_pool = giveaway.calculate_winners_pool();
-        let per_winner_payout = if actual_winners_count > 0 {
-            winners_pool / (actual_winners_count as u64)
-        } else {
-            0
-        };
-        if actual_winners_count > 0 {
-            require!(
-                per_winner_payout >= MIN_WINNER_PAYOUT_LAMPORTS,
-                GiveawayError::InsufficientFunds
-            );
-        }
-        let total_winners_payout = (actual_winners_count as u64)
-            .checked_mul(per_winner_payout)
-            .ok_or(GiveawayError::MathOverflow)?;
-
-        let winners: Vec<WinnerEntry> = winners_vec
-            .iter()
-            .enumerate()
-            .map(|(index, recipient)| WinnerEntry {
-                index: index as u32,
-                recipient: *recipient,
-                amount: per_winner_payout,
-            })
-            .collect();
-
-        let merkle_root = if !winners.is_empty() {
-            build_merkle_tree(&winners)?
-        } else {
-            [0u8; 32]
-        };
-
-        if winners_ledger.giveaway == Pubkey::default() {
-            winners_ledger.initialize(
-                giveaway_key,
-                merkle_root,
-                actual_winners_count,
-                total_winners_payout,
-                per_winner_payout,
-                winners_vec.clone(),
-                finalization_ledger.recompute_version,
-                clock.unix_timestamp,
-            );
-        } else {
-            winners_ledger.recompute(
-                merkle_root,
-                actual_winners_count,
-                total_winners_payout,
-                per_winner_payout,
-                winners_vec.clone(),
-                finalization_ledger.recompute_version,
-                clock.unix_timestamp,
-            )?;
-        }
-
-        giveaway.mark_winners_computed()?;
-
-        crate::events::GiveawayEvent::WinnersComputed {
-            giveaway_id: giveaway.id,
-            giveaway: giveaway_key.to_string(),
-            winners_ledger: winners_ledger.key().to_string(),
-            merkle_root: hex::encode(merkle_root),
-            seed: hex::encode(finalization_ledger.seed),
-            rule_version: GIVEAWAY_RULE_VERSION_V2.to_string(),
-            total_eligible: finalization_ledger.eligible_count,
-            winners_count: actual_winners_count,
-            total_payout_lamports: total_winners_payout,
-            per_winner_lamports: per_winner_payout,
-            recompute_version: giveaway.recompute_version,
-            winners: winners_vec
-                .iter()
-                .map(|winner| winner.to_string())
-                .collect(),
-            timestamp: clock.unix_timestamp,
-        }
-        .emit();
+    if completed {
+        finalize_settlement_root(
+            giveaway,
+            &mut accounts.winners_ledger,
+            root,
+            clock.unix_timestamp,
+        )?;
     }
 
     GiveawayEvent::FinalizationChunkProcessed {
         giveaway_id: giveaway.id,
         giveaway: giveaway_key.to_string(),
-        finalization_ledger: finalization_ledger.key().to_string(),
-        recompute_version: finalization_ledger.recompute_version,
-        batch_size: processed_in_batch,
-        processed_count: finalization_ledger.processed_count,
-        required_count: giveaway.provider_uploaded_count,
-        eligible_count: finalization_ledger.eligible_count,
-        candidate_count: finalization_ledger.candidates.len() as u32,
+        finalization_ledger: root_key.to_string(),
+        recompute_version: root.recompute_version,
+        batch_size,
+        processed_count: if completed {
+            root.required_count
+        } else {
+            root.processed_count
+        },
+        required_count: root.required_count,
+        eligible_count: root.eligible_count,
+        candidate_count: root.target_winners,
         completed,
         timestamp: clock.unix_timestamp,
     }
     .emit();
+    Ok(())
+}
 
-    msg!(
-        "Finalization chunk for giveaway {}: processed {}/{} (complete={})",
-        giveaway.id,
-        finalization_ledger.processed_count,
-        giveaway.provider_uploaded_count,
-        completed
+fn handle_missing_reveals(giveaway: &mut Account<Giveaway>, now: i64) -> Result<bool> {
+    if !giveaway.has_missing_attested_reveals() {
+        return Ok(false);
+    }
+    if now >= giveaway.upload_deadline_unix && giveaway.remediation_start_unix == 0 {
+        giveaway.begin_remediation(now);
+        GiveawayEvent::RevealRemediationBegan {
+            giveaway_id: giveaway.id,
+            giveaway: giveaway.key().to_string(),
+            included_reveals_count: giveaway.provider_uploaded_count,
+            attested_count: giveaway.attested_count,
+            remediation_start_unix: giveaway.remediation_start_unix,
+            remediation_deadline_unix: giveaway.remediation_deadline_unix,
+            timestamp: now,
+        }
+        .emit();
+        return Ok(true);
+    }
+    err!(GiveawayError::MissingAttestedParticipants)
+}
+
+fn load_participant(
+    program_id: &Pubkey,
+    info: &AccountInfo,
+    giveaway: &Pubkey,
+) -> Result<Participant> {
+    require!(info.is_writable, GiveawayError::AccountNotWritable);
+    require_eq!(info.owner, program_id, GiveawayError::InvalidProgram);
+    let mut data = &info.data.borrow()[..];
+    let participant = Participant::try_deserialize(&mut data)
+        .map_err(|_| GiveawayError::AccountNotInitialized)?;
+    require_keys_eq!(
+        participant.giveaway,
+        *giveaway,
+        GiveawayError::InvalidAccount
     );
+    require!(participant.reveal_included, GiveawayError::InvalidAccount);
+    assert_pda_owned(
+        program_id,
+        info,
+        &[
+            PARTICIPANT_SEED,
+            giveaway.as_ref(),
+            participant.wallet.as_ref(),
+        ],
+    )?;
+    Ok(participant)
+}
 
+fn store_participant(info: &AccountInfo, participant: &Participant) -> Result<()> {
+    let mut data = info.data.borrow_mut();
+    data.fill(0);
+    participant.try_serialize(&mut Cursor::new(&mut data[..]))
+}
+
+fn process_aggregation(root: &mut FinalizationLedger, participant: &mut Participant) -> Result<()> {
+    require!(
+        participant.finalization_version() != root.recompute_version,
+        GiveawayError::InvalidAccount
+    );
+    participant.mark_finalized_for_version(root.recompute_version, participant.last_updated_unix);
+    if participant.is_eligible() {
+        root.record_eligible(compute_participant_commitment_leaf(&participant.wallet))?;
+    }
+    Ok(())
+}
+
+fn process_radix(root: &mut FinalizationLedger, participant: &mut Participant) -> Result<()> {
+    let pass = root.prefix_len as u16 + 1;
+    require!(
+        !participant.processed_in_selection_pass(root.recompute_version, pass),
+        GiveawayError::InvalidAccount
+    );
+    participant.mark_selection_pass(root.recompute_version, pass, participant.last_updated_unix);
+    if participant.is_eligible() {
+        root.record_radix_key(&compute_candidate_key(&root.seed, &participant.wallet))?;
+    }
+    Ok(())
+}
+
+fn process_resolution(root: &mut FinalizationLedger, participant: &mut Participant) -> Result<()> {
+    let pass = 1000u16
+        .checked_add(root.prefix_len as u16)
+        .ok_or(GiveawayError::MathOverflow)?;
+    require!(
+        !participant.processed_in_selection_pass(root.recompute_version, pass),
+        GiveawayError::InvalidAccount
+    );
+    participant.mark_selection_pass(root.recompute_version, pass, participant.last_updated_unix);
+    if participant.is_eligible() {
+        let key = compute_candidate_key(&root.seed, &participant.wallet);
+        if root.matches_prefix(&key) {
+            root.resolve_threshold(key)?;
+        }
+    }
+    Ok(())
+}
+
+fn finalize_settlement_root(
+    giveaway: &mut Account<Giveaway>,
+    winners: &mut Account<WinnersLedger>,
+    root: &FinalizationLedger,
+    now: i64,
+) -> Result<()> {
+    let winners_count = root.target_winners;
+    let pool = giveaway.calculate_winners_pool();
+    let per_winner = if winners_count == 0 {
+        0
+    } else {
+        pool / u64::from(winners_count)
+    };
+    if winners_count > 0 {
+        require!(
+            per_winner >= MIN_WINNER_PAYOUT_LAMPORTS,
+            GiveawayError::InsufficientFunds
+        );
+    }
+    let total = u64::from(winners_count)
+        .checked_mul(per_winner)
+        .ok_or(GiveawayError::MathOverflow)?;
+    let commitment = compute_threshold_commitment(&root.threshold_key, winners_count);
+    winners.initialize(
+        giveaway.key(),
+        root.threshold_key,
+        commitment,
+        winners_count,
+        total,
+        per_winner,
+        root.recompute_version,
+        now,
+    );
+    winners.reserved[..32].copy_from_slice(&root.seed);
+    giveaway.mark_winners_computed()?;
+    GiveawayEvent::WinnersComputed {
+        giveaway_id: giveaway.id,
+        giveaway: giveaway.key().to_string(),
+        winners_ledger: winners.key().to_string(),
+        merkle_root: hex::encode(commitment),
+        seed: hex::encode(root.seed),
+        rule_version: GIVEAWAY_RULE_VERSION_V2.to_string(),
+        total_eligible: root.eligible_count,
+        winners_count,
+        total_payout_lamports: total,
+        per_winner_lamports: per_winner,
+        recompute_version: root.recompute_version,
+        winners: vec![],
+        timestamp: now,
+    }
+    .emit();
     Ok(())
 }

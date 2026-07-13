@@ -29,7 +29,7 @@
 //! - **Participant**: `["participant", giveaway_pubkey, wallet_pubkey]` - Participant data
 //! - **Vault**: `["vault", giveaway_pubkey]` - Fund custody account
 //! - **WinnersLedger**: `["winners_ledger", giveaway_pubkey]` - Winner settlement data
-//! - **FinalizationLedger**: `["finalization_ledger", giveaway_pubkey]` - Chunked winner candidate state
+//! - **FinalizationLedger**: `["finalization_root_v2", giveaway_pubkey]` - Fixed radix state
 //!
 //! ## Instruction Flow
 //!
@@ -63,9 +63,10 @@ pub mod state;
 pub mod utils;
 
 use instructions::{
-    attest_uploaded::*, begin_upload_phase::*, create_giveaway::*, disqualify_participant::*,
-    extend_active_deadline::*, finalize_winners::*, initialize::*, lock_winners::*, participate::*,
-    recompute_winners::*, settle_giveaway::*, settle_payout_batch::*, update_service_charge::*,
+    attest_uploaded::*, begin_upload_phase::*, close_participant::*, create_giveaway::*,
+    disqualify_participant::*, extend_active_deadline::*, finalize_winners::*, initialize::*,
+    lock_winners::*, participate::*, recompute_winners::*, settle_giveaway::*,
+    settle_no_eligible_giveaway::*, settle_payout_batch::*, update_service_charge::*,
     upload_reveals::*,
 };
 
@@ -188,7 +189,7 @@ pub mod giveaways {
     /// 1. `[writable]` Giveaway account
     /// 2. `[writable]` Vault account
     /// 3. `[writable]` WinnersLedger account (PDA: ["winners_ledger", giveaway])
-    /// 4. `[writable]` FinalizationLedger account (PDA: ["finalization_ledger", giveaway])
+    /// 4. `[writable]` FinalizationLedger account (PDA: ["finalization_root_v2", giveaway])
     /// 5. `[signer]` Authority
     /// 6. `[]` System program
     /// 7..N. `[writable]` Reveal-included participant accounts for this chunk
@@ -242,23 +243,35 @@ pub mod giveaways {
         instructions::lock_winners::process(ctx)
     }
 
-    /// Settle giveaway across all scenarios
+    /// Refund a giveaway that never reached winner finalization
     ///
-    /// Single instruction that handles settlement for both zero-participant
-    /// and winner scenarios. Computes winners, locks set, and handles immediate
-    /// refunds for zero-winner cases.
+    /// Handles no participants, no attesters, and expired omitted-reveal remediation
+    /// without initializing a winners ledger.
     ///
     /// Accounts expected:
     /// 0. `[]` Config account
     /// 1. `[writable]` Giveaway account
     /// 2. `[writable]` Vault account
-    /// 3. `[writable]` WinnersLedger account (PDA: ["winners_ledger", giveaway])
-    /// 4. `[signer]` Creator
-    /// 5. `[signer]` Authority (can be same as creator)
-    /// 6. `[]` System program
-    /// 7..N. `[]` All participant accounts
+    /// 3. `[signer, writable]` Creator
+    /// 4. `[signer]` Authority (can be same as creator)
     pub fn settle_giveaway(ctx: Context<SettleGiveaway>) -> Result<()> {
         instructions::settle_giveaway::process(ctx)
+    }
+
+    /// Refund a finalized giveaway with zero eligible winners
+    ///
+    /// Requires an existing winners ledger proving finalization completed with
+    /// `winners_count == 0`. This instruction never initializes the ledger.
+    ///
+    /// Accounts expected:
+    /// 0. `[]` Config account
+    /// 1. `[writable]` Giveaway account
+    /// 2. `[writable]` Vault account
+    /// 3. `[]` WinnersLedger account (PDA: ["winners_ledger", giveaway])
+    /// 4. `[signer, writable]` Creator
+    /// 5. `[signer]` Authority (can be same as creator)
+    pub fn settle_no_eligible_giveaway(ctx: Context<SettleNoEligibleGiveaway>) -> Result<()> {
+        instructions::settle_no_eligible_giveaway::process(ctx)
     }
 
     /// Process a batch of winner payouts
@@ -323,5 +336,16 @@ pub mod giveaways {
         new_service_fee_bps: u16,
     ) -> Result<()> {
         instructions::update_service_charge::process(ctx, new_service_fee_bps)
+    }
+
+    /// Close a participant account after giveaway settlement and reclaim rent
+    ///
+    /// Accounts expected:
+    /// 0. `[]` Config account
+    /// 1. `[]` Giveaway account
+    /// 2. `[writable]` Participant account
+    /// 3. `[signer, writable]` Participant wallet
+    pub fn close_participant(ctx: Context<CloseParticipant>) -> Result<()> {
+        instructions::close_participant::process(ctx)
     }
 }

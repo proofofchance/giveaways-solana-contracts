@@ -18,7 +18,6 @@ pub struct LockWinners<'info> {
         mut,
         constraint = !giveaway.settled @ GiveawayError::GiveawayAlreadySettled,
         constraint = giveaway.winners_computed @ GiveawayError::WinnersNotComputed,
-        constraint = !giveaway.winners_locked @ GiveawayError::WinnersLocked,
     )]
     pub giveaway: Account<'info, Giveaway>,
 
@@ -28,10 +27,9 @@ pub struct LockWinners<'info> {
     )]
     pub winners_ledger: Account<'info, WinnersLedger>,
 
-    #[account(
-        constraint = creator.key() == giveaway.creator @ GiveawayError::CreatorMismatch
-    )]
-    pub creator: Signer<'info>,
+    /// CHECK: Kept for ABI compatibility and validated against giveaway state.
+    #[account(constraint = creator.key() == giveaway.creator @ GiveawayError::CreatorMismatch)]
+    pub creator: AccountInfo<'info>,
 }
 
 pub fn process(ctx: Context<LockWinners>) -> Result<()> {
@@ -39,6 +37,11 @@ pub fn process(ctx: Context<LockWinners>) -> Result<()> {
     let winners_ledger = &mut ctx.accounts.winners_ledger;
     let _creator = &ctx.accounts.creator;
     let clock = Clock::get()?;
+
+    if giveaway.winners_locked {
+        require!(winners_ledger.locked, GiveawayError::InvalidAccount);
+        return Ok(());
+    }
 
     // Lock winners in both accounts
     giveaway.lock_winners();

@@ -89,12 +89,52 @@ pub fn compute_finalization_seed(giveaway_id: u64, aggregate_hash: [u8; 32]) -> 
     hasher.finalize().into()
 }
 
+/// Bind the final seed to the immutable eligible participant commitment.
+pub fn compute_finalization_seed_v2(
+    giveaway_id: u64,
+    aggregate_hash: [u8; 32],
+    eligible_count: u64,
+    participants_commitment: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GIVEAWAY_FINALIZATION_SEED_DOMAIN_V2);
+    hasher.update(giveaway_id.to_le_bytes());
+    hasher.update(eligible_count.to_le_bytes());
+    hasher.update(aggregate_hash);
+    hasher.update(participants_commitment);
+    hasher.finalize().into()
+}
+
 /// Compute one participant's deterministic ranking key.
 pub fn compute_candidate_rank(seed: &[u8; 32], participant: &Pubkey) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(GIVEAWAY_RANK_DOMAIN_V2);
     hasher.update(seed);
     hasher.update(participant.to_bytes());
+    hasher.finalize().into()
+}
+
+/// Canonical radix key: domain-separated rank followed by wallet bytes.
+pub fn compute_candidate_key(seed: &[u8; 32], participant: &Pubkey) -> [u8; 64] {
+    let rank = compute_candidate_rank(seed, participant);
+    let mut key = [0u8; 64];
+    key[..32].copy_from_slice(&rank);
+    key[32..].copy_from_slice(participant.as_ref());
+    key
+}
+
+pub fn compute_participant_commitment_leaf(participant: &Pubkey) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"GIVEAWAY_PARTICIPANT_V2");
+    hasher.update(participant.as_ref());
+    hasher.finalize().into()
+}
+
+pub fn compute_threshold_commitment(threshold_key: &[u8; 64], winners_count: u32) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"GIVEAWAY_THRESHOLD_V2");
+    hasher.update(threshold_key);
+    hasher.update(winners_count.to_le_bytes());
     hasher.finalize().into()
 }
 

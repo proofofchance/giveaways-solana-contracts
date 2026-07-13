@@ -58,6 +58,9 @@ pub struct Participant {
 impl Participant {
     const FINALIZATION_VERSION_OFFSET: usize = 0;
     const FINALIZATION_VERSION_LEN: usize = 4;
+    const SELECTION_VERSION_OFFSET: usize = 4;
+    const SELECTION_PASS_OFFSET: usize = 8;
+    const PAYOUT_VERSION_OFFSET: usize = 10;
 
     /// Maximum size of Participant account in bytes
     pub const MAX_SIZE: usize = 8 + // discriminator
@@ -145,6 +148,40 @@ impl Participant {
         self.reserved[Self::FINALIZATION_VERSION_OFFSET
             ..Self::FINALIZATION_VERSION_OFFSET + Self::FINALIZATION_VERSION_LEN]
             .copy_from_slice(&recompute_version.to_le_bytes());
+        self.last_updated_unix = current_time;
+    }
+
+    pub fn processed_in_selection_pass(&self, version: u32, pass: u16) -> bool {
+        let mut version_bytes = [0u8; 4];
+        version_bytes.copy_from_slice(
+            &self.reserved[Self::SELECTION_VERSION_OFFSET..Self::SELECTION_VERSION_OFFSET + 4],
+        );
+        let mut pass_bytes = [0u8; 2];
+        pass_bytes.copy_from_slice(
+            &self.reserved[Self::SELECTION_PASS_OFFSET..Self::SELECTION_PASS_OFFSET + 2],
+        );
+        u32::from_le_bytes(version_bytes) == version && u16::from_le_bytes(pass_bytes) == pass
+    }
+
+    pub fn mark_selection_pass(&mut self, version: u32, pass: u16, current_time: i64) {
+        self.reserved[Self::SELECTION_VERSION_OFFSET..Self::SELECTION_VERSION_OFFSET + 4]
+            .copy_from_slice(&version.to_le_bytes());
+        self.reserved[Self::SELECTION_PASS_OFFSET..Self::SELECTION_PASS_OFFSET + 2]
+            .copy_from_slice(&pass.to_le_bytes());
+        self.last_updated_unix = current_time;
+    }
+
+    pub fn payout_version(&self) -> u32 {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(
+            &self.reserved[Self::PAYOUT_VERSION_OFFSET..Self::PAYOUT_VERSION_OFFSET + 4],
+        );
+        u32::from_le_bytes(bytes)
+    }
+
+    pub fn mark_paid_for_version(&mut self, version: u32, current_time: i64) {
+        self.reserved[Self::PAYOUT_VERSION_OFFSET..Self::PAYOUT_VERSION_OFFSET + 4]
+            .copy_from_slice(&version.to_le_bytes());
         self.last_updated_unix = current_time;
     }
 

@@ -127,9 +127,12 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
         );
 
         // Deserialize participant account
-        let mut participant_data = &participant_info.data.borrow()[..];
-        let mut participant = Participant::try_deserialize(&mut participant_data)
-            .map_err(|_| GiveawayError::AccountNotInitialized)?;
+        let mut participant = {
+            let account_data = participant_info.data.borrow();
+            let mut participant_data = &account_data[..];
+            Participant::try_deserialize(&mut participant_data)
+                .map_err(|_| GiveawayError::AccountNotInitialized)?
+        };
 
         assert_pda_owned(
             ctx.program_id,

@@ -1,13 +1,13 @@
 //! # Settle Giveaway Instruction
 //!
-//! Single instruction that handles giveaway settlement across all scenarios:
-//! - Zero participants: immediate refund to creator
-//! - With participants: compute winners, lock set, handle refunds for unused slots
+//! Refund-only settlement for giveaway paths that never need a winners ledger:
+//! - Zero participants
+//! - No attesters
+//! - Omitted accepted reveals after remediation expires
 
 use crate::{
-    constants::*,
     error::GiveawayError,
-    state::{Config, Giveaway, WinnersLedger},
+    state::{Config, Giveaway},
     utils::account::transfer_lamports,
 };
 use anchor_lang::prelude::*;
@@ -19,7 +19,7 @@ pub struct SettleGiveaway<'info> {
 
     #[account(
         mut,
-        constraint = !giveaway.settled @ GiveawayError::GiveawayAlreadySettled,
+        constraint = giveaway.config == config.key() @ GiveawayError::InvalidAccount,
     )]
     pub giveaway: Account<'info, Giveaway>,
 
@@ -31,27 +31,16 @@ pub struct SettleGiveaway<'info> {
     pub vault: AccountInfo<'info>,
 
     #[account(
-        init_if_needed,
-        payer = creator,
-        space = WinnersLedger::calculate_size(giveaway.number_of_winners),
-        seeds = [WINNERS_LEDGER_SEED, giveaway.key().as_ref()],
-        bump
-    )]
-    pub winners_ledger: Account<'info, WinnersLedger>,
-
-    #[account(
         mut,
         constraint = creator.key() == giveaway.creator @ GiveawayError::CreatorMismatch
     )]
-    pub creator: Signer<'info>,
+    pub creator: AccountInfo<'info>,
 
     /// CHECK: Authority account - can be same as creator
     #[account(
         constraint = authority.key() == config.authority || authority.key() == giveaway.creator @ GiveawayError::Unauthorized
     )]
-    pub authority: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
+    pub authority: AccountInfo<'info>,
 }
 
 pub fn process(ctx: Context<SettleGiveaway>) -> Result<()> {
@@ -64,28 +53,11 @@ pub fn process(ctx: Context<SettleGiveaway>) -> Result<()> {
     let _authority = &accounts.authority;
     let clock = Clock::get()?;
 
-    let reason = if giveaway.participants_count == 0 {
-        require!(
-            clock.unix_timestamp >= giveaway.active_deadline_unix,
-            GiveawayError::SettlementNotReady
-        );
-        "no_participants"
-    } else if giveaway.attested_count == 0 {
-        require!(
-            clock.unix_timestamp >= giveaway.upload_deadline_unix,
-            GiveawayError::SettlementNotReady
-        );
-        "no_attesters"
-    } else if giveaway.remediation_expired(clock.unix_timestamp) {
-        "accepted_reveals_omitted_after_remediation"
-    } else if giveaway.winners_computed
-        && accounts.winners_ledger.giveaway == giveaway_key
-        && accounts.winners_ledger.winners_count == 0
-    {
-        "no_eligible_participants"
-    } else {
-        return Err(GiveawayError::InvalidInstruction.into());
-    };
+    if giveaway.settled {
+        return Ok(());
+    }
+
+    let reason = refund_reason(giveaway, clock.unix_timestamp)?;
 
     crate::events::GiveawayEvent::NoWinners {
         giveaway_id: giveaway.id,
@@ -99,7 +71,7 @@ pub fn process(ctx: Context<SettleGiveaway>) -> Result<()> {
 
     let refund = vault.lamports();
     if refund > 0 {
-        transfer_lamports(vault, &creator.to_account_info(), refund)?;
+        transfer_lamports(vault, creator, refund)?;
 
         crate::events::GiveawayEvent::CreatorRefunded {
             giveaway_id: giveaway.id,
@@ -129,4 +101,93 @@ pub fn process(ctx: Context<SettleGiveaway>) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn refund_reason(giveaway: &Giveaway, current_time: i64) -> Result<&'static str> {
+    if giveaway.participants_count == 0 {
+        require!(
+            current_time >= giveaway.active_deadline_unix,
+            GiveawayError::SettlementNotReady
+        );
+        Ok("no_participants")
+    } else if giveaway.attested_count == 0 {
+        require!(
+            current_time >= giveaway.upload_deadline_unix,
+            GiveawayError::SettlementNotReady
+        );
+        Ok("no_attesters")
+    } else if giveaway.remediation_expired(current_time) {
+        Ok("accepted_reveals_omitted_after_remediation")
+    } else {
+        Err(GiveawayError::InvalidInstruction.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{GiveawayStatus, GIVEAWAY_ACCOUNT_VERSION};
+
+    fn test_giveaway() -> Giveaway {
+        Giveaway {
+            id: 1,
+            config: Pubkey::new_unique(),
+            creator: Pubkey::new_unique(),
+            vault: Pubkey::new_unique(),
+            status: GiveawayStatus::Active,
+            total_payout_lamports: 1_000_000,
+            number_of_winners: 10,
+            service_fee_bps: 500,
+            created_at_unix: 0,
+            active_start_unix: 0,
+            active_deadline_unix: 100,
+            upload_start_unix: 100,
+            upload_deadline_unix: 200,
+            settlement_start_unix: 0,
+            participants_count: 0,
+            attested_count: 0,
+            provider_uploaded_count: 0,
+            poc_aggregate_hash: [0; 32],
+            uploads_complete: false,
+            disqualified_count: 0,
+            winners_computed: false,
+            winners_locked: false,
+            recompute_version: 0,
+            settled: false,
+            remediation_start_unix: 0,
+            remediation_deadline_unix: 0,
+            account_version: GIVEAWAY_ACCOUNT_VERSION,
+            reserved: [0; 110],
+        }
+    }
+
+    #[test]
+    fn refund_reason_accepts_simple_refund_paths() {
+        let mut giveaway = test_giveaway();
+        assert_eq!(refund_reason(&giveaway, 100).unwrap(), "no_participants");
+
+        giveaway.participants_count = 3;
+        assert_eq!(refund_reason(&giveaway, 200).unwrap(), "no_attesters");
+
+        giveaway.attested_count = 2;
+        giveaway.provider_uploaded_count = 1;
+        giveaway.remediation_start_unix = 201;
+        giveaway.remediation_deadline_unix = 301;
+        assert_eq!(
+            refund_reason(&giveaway, 302).unwrap(),
+            "accepted_reveals_omitted_after_remediation"
+        );
+    }
+
+    #[test]
+    fn refund_reason_rejects_no_eligible_finalization_path() {
+        let mut giveaway = test_giveaway();
+        giveaway.participants_count = 3;
+        giveaway.attested_count = 3;
+        giveaway.provider_uploaded_count = 3;
+        giveaway.uploads_complete = true;
+        giveaway.winners_computed = true;
+
+        assert!(refund_reason(&giveaway, 250).is_err());
+    }
 }

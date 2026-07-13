@@ -1,78 +1,71 @@
-//! # Finalization Ledger Account State
-//!
-//! Tracks chunked winner finalization for large giveaways. The ledger stores the
-//! best ranked candidates seen so far, so finalization never needs every
-//! participant account in one transaction.
+//! Fixed-size protocol-v2 radix finalization state.
 
 use crate::error::GiveawayError;
 use anchor_lang::prelude::*;
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RankedCandidate {
-    pub rank: [u8; 32],
-    pub wallet: Pubkey,
-}
+pub const FINALIZATION_PROTOCOL_VERSION: u16 = 2;
+pub const PHASE_AGGREGATING: u8 = 0;
+pub const PHASE_RADIX: u8 = 1;
+pub const PHASE_RESOLVING: u8 = 2;
+pub const PHASE_COMPLETED: u8 = 3;
+pub const CANDIDATE_KEY_LEN: usize = 64;
 
-impl RankedCandidate {
-    pub fn new(rank: [u8; 32], wallet: Pubkey) -> Self {
-        Self { rank, wallet }
-    }
-}
-
-/// Chunked finalization state for one giveaway.
-///
-/// PDA seeds: `["finalization_ledger", giveaway_pubkey]`
-#[account]
+#[account(zero_copy(unsafe))]
+#[repr(C)]
 pub struct FinalizationLedger {
     pub giveaway: Pubkey,
+    pub protocol_version: u16,
     pub recompute_version: u32,
-    pub target_winners: u32,
+    pub phase: u8,
+    pub required_count: u64,
     pub processed_count: u64,
     pub eligible_count: u64,
+    pub target_winners: u32,
     pub seed: [u8; 32],
-    pub candidates: Vec<RankedCandidate>,
-    pub completed: bool,
+    pub participants_commitment: [u8; 32],
+    pub prefix: [u8; CANDIDATE_KEY_LEN],
+    pub prefix_len: u8,
+    pub remaining_rank: u64,
+    pub histogram: [u64; 256],
+    pub threshold_key: [u8; CANDIDATE_KEY_LEN],
+    pub threshold_found: u8,
+    pub completed: u8,
     pub started_at_unix: i64,
     pub completed_at_unix: i64,
     pub reserved: [u8; 64],
 }
 
 impl FinalizationLedger {
-    pub const BASE_SIZE: usize = 8 + // discriminator
-        32 + // giveaway
-        4 + // recompute_version
-        4 + // target_winners
-        8 + // processed_count
-        8 + // eligible_count
-        32 + // seed
-        4 + // candidates vec length prefix
-        1 + // completed
-        8 + // started_at_unix
-        8 + // completed_at_unix
-        64; // reserved
+    pub const SIZE: usize = 8 + core::mem::size_of::<Self>();
 
-    pub const RANKED_CANDIDATE_SIZE: usize = 32 + 32;
-
-    pub fn calculate_size(target_winners: u32) -> usize {
-        Self::BASE_SIZE + target_winners as usize * Self::RANKED_CANDIDATE_SIZE
+    pub fn calculate_size(_target_winners: u32) -> usize {
+        Self::SIZE
     }
 
     pub fn initialize(
         &mut self,
         giveaway: Pubkey,
         recompute_version: u32,
-        target_winners: u32,
-        seed: [u8; 32],
+        required_count: u64,
         current_time: i64,
     ) {
         self.giveaway = giveaway;
+        self.protocol_version = FINALIZATION_PROTOCOL_VERSION;
         self.recompute_version = recompute_version;
-        self.target_winners = target_winners;
+        self.phase = PHASE_AGGREGATING;
+        self.required_count = required_count;
         self.processed_count = 0;
         self.eligible_count = 0;
-        self.seed = seed;
-        self.candidates = Vec::new();
-        self.completed = false;
+        self.target_winners = 0;
+        self.seed = [0; 32];
+        self.participants_commitment = [0; 32];
+        self.prefix = [0; CANDIDATE_KEY_LEN];
+        self.prefix_len = 0;
+        self.remaining_rank = 0;
+        self.histogram = [0; 256];
+        self.threshold_key = [0; CANDIDATE_KEY_LEN];
+        self.threshold_found = 0;
+        self.completed = 0;
         self.started_at_unix = current_time;
         self.completed_at_unix = 0;
         self.reserved = [0; 64];
@@ -86,143 +79,196 @@ impl FinalizationLedger {
         Ok(())
     }
 
-    pub fn record_eligible(&mut self, wallet: Pubkey, rank: [u8; 32]) -> Result<()> {
+    pub fn record_eligible(&mut self, commitment_leaf: [u8; 32]) -> Result<()> {
         self.eligible_count = self
             .eligible_count
             .checked_add(1)
             .ok_or(GiveawayError::MathOverflow)?;
-
-        if self.target_winners == 0 {
-            return Ok(());
+        for (target, byte) in self.participants_commitment.iter_mut().zip(commitment_leaf) {
+            *target ^= byte;
         }
+        Ok(())
+    }
 
-        if self
-            .candidates
-            .iter()
-            .any(|candidate| candidate.wallet == wallet)
+    pub fn begin_radix(&mut self, seed: [u8; 32], target_winners: u32) {
+        self.phase = PHASE_RADIX;
+        self.seed = seed;
+        self.target_winners = target_winners;
+        self.remaining_rank = target_winners as u64;
+        self.reset_pass();
+    }
+
+    pub fn record_radix_key(&mut self, key: &[u8; CANDIDATE_KEY_LEN]) -> Result<()> {
+        if self.prefix_len as usize >= CANDIDATE_KEY_LEN
+            || key[..self.prefix_len as usize] != self.prefix[..self.prefix_len as usize]
         {
-            return Err(GiveawayError::InvalidAccount.into());
-        }
-
-        let candidate = RankedCandidate::new(rank, wallet);
-        let target = self.target_winners as usize;
-        if self.candidates.len() < target {
-            self.candidates.push(candidate);
-            self.sort_candidates();
             return Ok(());
         }
+        let bucket = key[self.prefix_len as usize] as usize;
+        self.histogram[bucket] = self.histogram[bucket]
+            .checked_add(1)
+            .ok_or(GiveawayError::MathOverflow)?;
+        Ok(())
+    }
 
-        if let Some(worst_index) = self.worst_candidate_index() {
-            if candidate_precedes(&candidate, &self.candidates[worst_index]) {
-                self.candidates[worst_index] = candidate;
-                self.sort_candidates();
+    pub fn finish_radix_pass(&mut self) -> Result<()> {
+        require!(self.remaining_rank > 0, GiveawayError::InvalidInstruction);
+        let mut before = 0u64;
+        for (bucket, count) in self.histogram.iter().copied().enumerate() {
+            let through = before
+                .checked_add(count)
+                .ok_or(GiveawayError::MathOverflow)?;
+            if self.remaining_rank <= through {
+                self.prefix[self.prefix_len as usize] = bucket as u8;
+                self.prefix_len = self
+                    .prefix_len
+                    .checked_add(1)
+                    .ok_or(GiveawayError::MathOverflow)?;
+                self.remaining_rank = self.remaining_rank.saturating_sub(before);
+                if count == 1 || self.prefix_len as usize == CANDIDATE_KEY_LEN {
+                    self.phase = PHASE_RESOLVING;
+                }
+                self.reset_pass();
+                return Ok(());
             }
+            before = through;
         }
+        err!(GiveawayError::InvalidInstruction)
+    }
 
+    pub fn matches_prefix(&self, key: &[u8; CANDIDATE_KEY_LEN]) -> bool {
+        key[..self.prefix_len as usize] == self.prefix[..self.prefix_len as usize]
+    }
+
+    pub fn resolve_threshold(&mut self, key: [u8; CANDIDATE_KEY_LEN]) -> Result<()> {
+        require!(self.threshold_found == 0, GiveawayError::InvalidAccount);
+        self.threshold_key = key;
+        self.threshold_found = 1;
         Ok(())
     }
 
     pub fn complete(&mut self, current_time: i64) {
-        self.completed = true;
+        self.phase = PHASE_COMPLETED;
+        self.completed = 1;
         self.completed_at_unix = current_time;
-        self.sort_candidates();
     }
 
-    pub fn winner_wallets(&self) -> Vec<Pubkey> {
-        let mut candidates = self.candidates.clone();
-        candidates.sort_by(candidate_ordering);
-        candidates
-            .into_iter()
-            .take(self.target_winners as usize)
-            .map(|candidate| candidate.wallet)
-            .collect()
+    pub fn reset_pass(&mut self) {
+        self.processed_count = 0;
+        self.histogram = [0; 256];
     }
-
-    fn sort_candidates(&mut self) {
-        self.candidates.sort_by(candidate_ordering);
-    }
-
-    fn worst_candidate_index(&self) -> Option<usize> {
-        self.candidates
-            .iter()
-            .enumerate()
-            .max_by(|(_, left), (_, right)| candidate_ordering(left, right))
-            .map(|(index, _)| index)
-    }
-}
-
-fn candidate_precedes(left: &RankedCandidate, right: &RankedCandidate) -> bool {
-    candidate_ordering(left, right).is_lt()
-}
-
-fn candidate_ordering(left: &RankedCandidate, right: &RankedCandidate) -> core::cmp::Ordering {
-    left.rank
-        .cmp(&right.rank)
-        .then_with(|| left.wallet.to_bytes().cmp(&right.wallet.to_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::crypto::compute_candidate_key;
 
-    #[test]
-    fn keeps_lowest_ranked_top_k_candidates() {
-        let giveaway = Pubkey::new_unique();
-        let mut ledger = FinalizationLedger {
-            giveaway: Pubkey::default(),
-            recompute_version: 0,
-            target_winners: 0,
-            processed_count: 0,
-            eligible_count: 0,
-            seed: [0; 32],
-            candidates: Vec::new(),
-            completed: false,
-            started_at_unix: 0,
-            completed_at_unix: 0,
-            reserved: [0; 64],
-        };
-        ledger.initialize(giveaway, 1, 2, [9; 32], 100);
-
-        let wallet_high = Pubkey::new_unique();
-        let wallet_low = Pubkey::new_unique();
-        let wallet_mid = Pubkey::new_unique();
-        ledger.record_eligible(wallet_high, [9; 32]).unwrap();
-        ledger.record_eligible(wallet_low, [1; 32]).unwrap();
-        ledger.record_eligible(wallet_mid, [5; 32]).unwrap();
-
-        let winners = ledger.winner_wallets();
-        assert_eq!(winners.len(), 2);
-        assert_eq!(winners[0], wallet_low);
-        assert_eq!(winners[1], wallet_mid);
-        assert!(!winners.contains(&wallet_high));
+    fn below_eight_kib(size: usize) -> bool {
+        size < 8 * 1024
     }
 
     #[test]
-    fn finalization_progress_counters_support_u64_scale() {
-        let giveaway = Pubkey::new_unique();
-        let mut ledger = FinalizationLedger {
+    fn account_is_fixed_and_below_eight_kib() {
+        assert_eq!(
+            FinalizationLedger::calculate_size(1),
+            FinalizationLedger::calculate_size(1000)
+        );
+        assert!(below_eight_kib(FinalizationLedger::SIZE));
+    }
+
+    #[test]
+    fn radix_selects_bucket_containing_kth_key() {
+        let mut root = FinalizationLedger {
             giveaway: Pubkey::default(),
+            protocol_version: 0,
             recompute_version: 0,
+            phase: 0,
+            required_count: 0,
+            processed_count: 0,
+            eligible_count: 0,
             target_winners: 0,
-            processed_count: u64::from(u32::MAX),
-            eligible_count: u64::from(u32::MAX),
             seed: [0; 32],
-            candidates: Vec::new(),
-            completed: false,
+            participants_commitment: [0; 32],
+            prefix: [0; 64],
+            prefix_len: 0,
+            remaining_rank: 0,
+            histogram: [0; 256],
+            threshold_key: [0; 64],
+            threshold_found: 0,
+            completed: 0,
             started_at_unix: 0,
             completed_at_unix: 0,
             reserved: [0; 64],
         };
-        ledger.initialize(giveaway, 1, 2, [9; 32], 100);
-        ledger.processed_count = u64::from(u32::MAX);
-        ledger.eligible_count = u64::from(u32::MAX);
+        root.initialize(Pubkey::new_unique(), 1, 3, 1);
+        root.begin_radix([1; 32], 2);
+        for first in [1u8, 7, 9] {
+            let mut key = [0u8; 64];
+            key[0] = first;
+            root.record_radix_key(&key).unwrap();
+        }
+        root.finish_radix_pass().unwrap();
+        assert_eq!(root.prefix[0], 7);
+        assert_eq!(root.phase, PHASE_RESOLVING);
+    }
 
-        ledger.record_processed().unwrap();
-        ledger
-            .record_eligible(Pubkey::new_unique(), [1; 32])
-            .unwrap();
+    #[test]
+    fn radix_threshold_selects_exact_top_k_from_fifteen_hundred_candidates() {
+        let seed = [7u8; 32];
+        let target = 317u32;
+        let keys = (0..1_500u32)
+            .map(|value| {
+                let mut bytes = [0u8; 32];
+                bytes[..4].copy_from_slice(&value.to_le_bytes());
+                compute_candidate_key(&seed, &Pubkey::new_from_array(bytes))
+            })
+            .collect::<Vec<_>>();
+        let mut root = FinalizationLedger {
+            giveaway: Pubkey::default(),
+            protocol_version: 0,
+            recompute_version: 0,
+            phase: 0,
+            required_count: 0,
+            processed_count: 0,
+            eligible_count: 0,
+            target_winners: 0,
+            seed: [0; 32],
+            participants_commitment: [0; 32],
+            prefix: [0; 64],
+            prefix_len: 0,
+            remaining_rank: 0,
+            histogram: [0; 256],
+            threshold_key: [0; 64],
+            threshold_found: 0,
+            completed: 0,
+            started_at_unix: 0,
+            completed_at_unix: 0,
+            reserved: [0; 64],
+        };
+        root.initialize(Pubkey::new_unique(), 1, keys.len() as u64, 1);
+        root.eligible_count = keys.len() as u64;
+        root.begin_radix(seed, target);
+        while root.phase == PHASE_RADIX {
+            for key in &keys {
+                root.record_radix_key(key).unwrap();
+            }
+            root.finish_radix_pass().unwrap();
+        }
+        for key in &keys {
+            if root.matches_prefix(key) {
+                root.resolve_threshold(*key).unwrap();
+            }
+        }
 
-        assert_eq!(ledger.processed_count, u64::from(u32::MAX) + 1);
-        assert_eq!(ledger.eligible_count, u64::from(u32::MAX) + 1);
+        assert_eq!(
+            keys.iter()
+                .filter(|key| **key <= root.threshold_key)
+                .count(),
+            target as usize
+        );
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(root.threshold_key, sorted[target as usize - 1]);
     }
 }
