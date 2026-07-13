@@ -6,12 +6,12 @@ use crate::{
     events::GiveawayEvent,
     state::{
         Config, FinalizationLedger, Giveaway, Participant, WinnersLedger,
-        FINALIZATION_PROTOCOL_VERSION, PHASE_AGGREGATING, PHASE_COMPLETED, PHASE_RADIX,
-        PHASE_RESOLVING,
+        FINALIZATION_PROTOCOL_VERSION, PHASE_AGGREGATING, PHASE_COMPLETED, PHASE_EMITTING,
+        PHASE_RADIX, PHASE_RESOLVING,
     },
     utils::{
         crypto::{
-            compute_candidate_key, compute_finalization_seed_v2,
+            compute_candidate_key, compute_finalization_seed_v3,
             compute_participant_commitment_leaf, compute_threshold_commitment,
         },
         pda::assert_pda_owned,
@@ -83,7 +83,7 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
         root.initialize(
             giveaway_key,
             generation,
-            giveaway.provider_uploaded_count,
+            giveaway.participants_count,
             clock.unix_timestamp,
         );
     } else {
@@ -100,7 +100,7 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
         );
         require_eq!(
             root.required_count,
-            giveaway.provider_uploaded_count,
+            giveaway.participants_count,
             GiveawayError::InvalidInstruction
         );
         if root.completed != 0 {
@@ -115,12 +115,40 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
     let mut batch_size = 0u32;
     for participant_info in ctx.remaining_accounts.iter() {
         let mut participant = load_participant(ctx.program_id, participant_info, &giveaway_key)?;
-        match root.phase {
-            PHASE_AGGREGATING => process_aggregation(root, &mut participant)?,
-            PHASE_RADIX => process_radix(root, &mut participant)?,
-            PHASE_RESOLVING => process_resolution(root, &mut participant)?,
+        require_eq!(
+            participant.participant_index(),
+            root.processed_count,
+            GiveawayError::InvalidInstruction
+        );
+        let selected = match root.phase {
+            PHASE_AGGREGATING => {
+                process_aggregation(root, &mut participant)?;
+                None
+            }
+            PHASE_RADIX => {
+                process_radix(root, &mut participant)?;
+                None
+            }
+            PHASE_RESOLVING => {
+                process_resolution(root, &mut participant)?;
+                None
+            }
+            PHASE_EMITTING => process_emitting(root, &mut participant)?,
             PHASE_COMPLETED => return err!(GiveawayError::WinnersLocked),
             _ => return err!(GiveawayError::InvalidAccount),
+        };
+        if let Some((candidate_key, emission_index)) = selected {
+            GiveawayEvent::WinnerSelected {
+                giveaway_id: giveaway.id,
+                giveaway: giveaway_key.to_string(),
+                participant: participant.wallet.to_string(),
+                participant_account: participant_info.key().to_string(),
+                candidate_key: hex::encode(candidate_key),
+                recompute_version: root.recompute_version,
+                emission_index,
+                timestamp: clock.unix_timestamp,
+            }
+            .emit();
         }
         participant.last_updated_unix = clock.unix_timestamp;
         store_participant(participant_info, &participant)?;
@@ -144,7 +172,7 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
                     root.complete(clock.unix_timestamp);
                     completed = true;
                 } else {
-                    let seed = compute_finalization_seed_v2(
+                    let seed = compute_finalization_seed_v3(
                         giveaway.id,
                         giveaway.poc_aggregate_hash,
                         root.eligible_count,
@@ -158,6 +186,14 @@ pub fn process(ctx: Context<FinalizeWinners>) -> Result<()> {
                 require!(
                     root.threshold_found != 0,
                     GiveawayError::NoEligibleParticipants
+                );
+                root.begin_emitting();
+            }
+            PHASE_EMITTING => {
+                require_eq!(
+                    root.emitted_count(),
+                    root.target_winners,
+                    GiveawayError::InvalidAccount
                 );
                 root.complete(clock.unix_timestamp);
                 completed = true;
@@ -232,7 +268,6 @@ fn load_participant(
         *giveaway,
         GiveawayError::InvalidAccount
     );
-    require!(participant.reveal_included, GiveawayError::InvalidAccount);
     assert_pda_owned(
         program_id,
         info,
@@ -258,7 +293,11 @@ fn process_aggregation(root: &mut FinalizationLedger, participant: &mut Particip
     );
     participant.mark_finalized_for_version(root.recompute_version, participant.last_updated_unix);
     if participant.is_eligible() {
-        root.record_eligible(compute_participant_commitment_leaf(&participant.wallet))?;
+        root.record_eligible(compute_participant_commitment_leaf(
+            participant.participant_index(),
+            &participant.wallet,
+            participant.reveal_digest(),
+        ))?;
     }
     Ok(())
 }
@@ -292,6 +331,27 @@ fn process_resolution(root: &mut FinalizationLedger, participant: &mut Participa
         }
     }
     Ok(())
+}
+
+fn process_emitting(
+    root: &mut FinalizationLedger,
+    participant: &mut Participant,
+) -> Result<Option<([u8; 64], u32)>> {
+    let pass = 2_000u16;
+    require!(
+        !participant.processed_in_selection_pass(root.recompute_version, pass),
+        GiveawayError::InvalidAccount
+    );
+    participant.mark_selection_pass(root.recompute_version, pass, participant.last_updated_unix);
+    if !participant.is_eligible() {
+        return Ok(None);
+    }
+    let key = compute_candidate_key(&root.seed, &participant.wallet);
+    if key > root.threshold_key {
+        return Ok(None);
+    }
+    let emission_index = root.record_emitted()?;
+    Ok(Some((key, emission_index)))
 }
 
 fn finalize_settlement_root(
@@ -329,19 +389,30 @@ fn finalize_settlement_root(
     );
     winners.reserved[..32].copy_from_slice(&root.seed);
     giveaway.mark_winners_computed()?;
+    giveaway.lock_winners();
+    winners.lock(now);
     GiveawayEvent::WinnersComputed {
         giveaway_id: giveaway.id,
         giveaway: giveaway.key().to_string(),
         winners_ledger: winners.key().to_string(),
         merkle_root: hex::encode(commitment),
         seed: hex::encode(root.seed),
-        rule_version: GIVEAWAY_RULE_VERSION_V2.to_string(),
+        rule_version: GIVEAWAY_RULE_VERSION_V4.to_string(),
         total_eligible: root.eligible_count,
         winners_count,
         total_payout_lamports: total,
         per_winner_lamports: per_winner,
         recompute_version: root.recompute_version,
         winners: vec![],
+        timestamp: now,
+    }
+    .emit();
+    GiveawayEvent::WinnersLocked {
+        giveaway_id: giveaway.id,
+        giveaway: giveaway.key().to_string(),
+        winners_ledger: winners.key().to_string(),
+        final_recompute_version: giveaway.recompute_version,
+        final_winners_count: winners.winners_count,
         timestamp: now,
     }
     .emit();

@@ -61,6 +61,10 @@ impl Participant {
     const SELECTION_VERSION_OFFSET: usize = 4;
     const SELECTION_PASS_OFFSET: usize = 8;
     const PAYOUT_VERSION_OFFSET: usize = 10;
+    const REVEAL_DIGEST_OFFSET: usize = 16;
+    const REVEAL_DIGEST_LEN: usize = 32;
+    const PARTICIPANT_INDEX_OFFSET: usize = 48;
+    const PARTICIPANT_INDEX_LEN: usize = 8;
 
     /// Maximum size of Participant account in bytes
     pub const MAX_SIZE: usize = 8 + // discriminator
@@ -86,6 +90,7 @@ impl Participant {
         commitment_hash: [u8; 32],
         proof_text: String,
         current_time: i64,
+        participant_index: u64,
     ) {
         self.giveaway = giveaway;
         self.wallet = wallet;
@@ -100,6 +105,9 @@ impl Participant {
         self.created_at_unix = current_time;
         self.last_updated_unix = current_time;
         self.reserved = [0; 64];
+        self.reserved[Self::PARTICIPANT_INDEX_OFFSET
+            ..Self::PARTICIPANT_INDEX_OFFSET + Self::PARTICIPANT_INDEX_LEN]
+            .copy_from_slice(&participant_index.to_le_bytes());
     }
 
     /// Update participant entry
@@ -120,6 +128,31 @@ impl Participant {
     pub fn mark_reveal_included(&mut self, current_time: i64) {
         self.reveal_included = true;
         self.last_updated_unix = current_time;
+    }
+
+    pub fn include_verified_reveal(&mut self, digest: [u8; 32], current_time: i64) {
+        self.reserved
+            [Self::REVEAL_DIGEST_OFFSET..Self::REVEAL_DIGEST_OFFSET + Self::REVEAL_DIGEST_LEN]
+            .copy_from_slice(&digest);
+        self.mark_reveal_included(current_time);
+    }
+
+    pub fn reveal_digest(&self) -> [u8; 32] {
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(
+            &self.reserved
+                [Self::REVEAL_DIGEST_OFFSET..Self::REVEAL_DIGEST_OFFSET + Self::REVEAL_DIGEST_LEN],
+        );
+        digest
+    }
+
+    pub fn participant_index(&self) -> u64 {
+        let mut bytes = [0u8; Self::PARTICIPANT_INDEX_LEN];
+        bytes.copy_from_slice(
+            &self.reserved[Self::PARTICIPANT_INDEX_OFFSET
+                ..Self::PARTICIPANT_INDEX_OFFSET + Self::PARTICIPANT_INDEX_LEN],
+        );
+        u64::from_le_bytes(bytes)
     }
 
     /// Disqualify participant
@@ -205,5 +238,42 @@ impl Participant {
                 | crate::constants::disqualification_reasons::DUPLICATE_ENTRY
                 | crate::constants::disqualification_reasons::OTHER
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stores_canonical_index_and_verified_reveal_digest_in_reserved_bytes() {
+        let mut participant = Participant {
+            giveaway: Pubkey::default(),
+            wallet: Pubkey::default(),
+            commitment_hash: [0; 32],
+            proof_text: String::new(),
+            attested_uploaded: false,
+            attested_at_unix: 0,
+            reveal_included: false,
+            disqualified: false,
+            disqualification_reason: 0,
+            disqualified_at_unix: 0,
+            created_at_unix: 0,
+            last_updated_unix: 0,
+            reserved: [0; 64],
+        };
+        participant.initialize(
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            [7; 32],
+            "proof".to_string(),
+            10,
+            42,
+        );
+        participant.include_verified_reveal([9; 32], 11);
+
+        assert_eq!(participant.participant_index(), 42);
+        assert_eq!(participant.reveal_digest(), [9; 32]);
+        assert!(participant.reveal_included);
     }
 }

@@ -169,10 +169,11 @@ pub fn process(ctx: Context<UploadReveals>, reveals: Vec<RevealData>) -> Result<
         );
 
         let plaintext = build_reveal_plaintext(&reveal.lucky_words, &reveal.salt)?;
-        reveal_digests.push(compute_reveal_digest(&participant.wallet, &plaintext));
+        let reveal_digest = compute_reveal_digest(&participant.wallet, &plaintext);
+        reveal_digests.push(reveal_digest);
 
         // Mark reveal as included and write back.
-        participant.mark_reveal_included(clock.unix_timestamp);
+        participant.include_verified_reveal(reveal_digest, clock.unix_timestamp);
 
         let mut account_data = participant_info.data.borrow_mut();
         account_data.fill(0);

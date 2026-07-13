@@ -2,12 +2,14 @@
 
 use crate::error::GiveawayError;
 use anchor_lang::prelude::*;
+use sha2::{Digest, Sha256};
 
-pub const FINALIZATION_PROTOCOL_VERSION: u16 = 2;
+pub const FINALIZATION_PROTOCOL_VERSION: u16 = 4;
 pub const PHASE_AGGREGATING: u8 = 0;
 pub const PHASE_RADIX: u8 = 1;
 pub const PHASE_RESOLVING: u8 = 2;
-pub const PHASE_COMPLETED: u8 = 3;
+pub const PHASE_EMITTING: u8 = 3;
+pub const PHASE_COMPLETED: u8 = 4;
 pub const CANDIDATE_KEY_LEN: usize = 64;
 
 #[account(zero_copy(unsafe))]
@@ -36,6 +38,8 @@ pub struct FinalizationLedger {
 }
 
 impl FinalizationLedger {
+    const EMITTED_COUNT_OFFSET: usize = 0;
+    const EMITTED_COUNT_LEN: usize = 4;
     pub const SIZE: usize = 8 + core::mem::size_of::<Self>();
 
     pub fn calculate_size(_target_winners: u32) -> usize {
@@ -84,9 +88,11 @@ impl FinalizationLedger {
             .eligible_count
             .checked_add(1)
             .ok_or(GiveawayError::MathOverflow)?;
-        for (target, byte) in self.participants_commitment.iter_mut().zip(commitment_leaf) {
-            *target ^= byte;
-        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"GIVEAWAY_POOL_V3");
+        hasher.update(self.participants_commitment);
+        hasher.update(commitment_leaf);
+        self.participants_commitment = hasher.finalize().into();
         Ok(())
     }
 
@@ -145,6 +151,34 @@ impl FinalizationLedger {
         self.threshold_key = key;
         self.threshold_found = 1;
         Ok(())
+    }
+
+    pub fn begin_emitting(&mut self) {
+        self.phase = PHASE_EMITTING;
+        self.reserved
+            [Self::EMITTED_COUNT_OFFSET..Self::EMITTED_COUNT_OFFSET + Self::EMITTED_COUNT_LEN]
+            .copy_from_slice(&0u32.to_le_bytes());
+        self.reset_pass();
+    }
+
+    pub fn emitted_count(&self) -> u32 {
+        let mut bytes = [0u8; Self::EMITTED_COUNT_LEN];
+        bytes.copy_from_slice(
+            &self.reserved
+                [Self::EMITTED_COUNT_OFFSET..Self::EMITTED_COUNT_OFFSET + Self::EMITTED_COUNT_LEN],
+        );
+        u32::from_le_bytes(bytes)
+    }
+
+    pub fn record_emitted(&mut self) -> Result<u32> {
+        let winner_index = self.emitted_count();
+        let next = winner_index
+            .checked_add(1)
+            .ok_or(GiveawayError::MathOverflow)?;
+        self.reserved
+            [Self::EMITTED_COUNT_OFFSET..Self::EMITTED_COUNT_OFFSET + Self::EMITTED_COUNT_LEN]
+            .copy_from_slice(&next.to_le_bytes());
+        Ok(winner_index)
     }
 
     pub fn complete(&mut self, current_time: i64) {
@@ -211,6 +245,39 @@ mod tests {
         root.finish_radix_pass().unwrap();
         assert_eq!(root.prefix[0], 7);
         assert_eq!(root.phase, PHASE_RESOLVING);
+    }
+
+    #[test]
+    fn archival_emission_count_is_bounded_and_persisted() {
+        let mut root = FinalizationLedger {
+            giveaway: Pubkey::default(),
+            protocol_version: 0,
+            recompute_version: 0,
+            phase: 0,
+            required_count: 0,
+            processed_count: 0,
+            eligible_count: 0,
+            target_winners: 0,
+            seed: [0; 32],
+            participants_commitment: [0; 32],
+            prefix: [0; 64],
+            prefix_len: 0,
+            remaining_rank: 0,
+            histogram: [0; 256],
+            threshold_key: [0; 64],
+            threshold_found: 0,
+            completed: 0,
+            started_at_unix: 0,
+            completed_at_unix: 0,
+            reserved: [0; 64],
+        };
+        root.initialize(Pubkey::new_unique(), 7, 12, 1);
+        root.begin_emitting();
+
+        assert_eq!(root.phase, PHASE_EMITTING);
+        assert_eq!(root.record_emitted().unwrap(), 0);
+        assert_eq!(root.record_emitted().unwrap(), 1);
+        assert_eq!(root.emitted_count(), 2);
     }
 
     #[test]

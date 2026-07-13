@@ -29,8 +29,10 @@ pub struct AttestUploaded<'info> {
     )]
     pub participant_account: Account<'info, Participant>,
 
+    /// CHECK: The provider receipt and participant PDA bind this wallet. It does
+    /// not need to sign, so any fee payer can relay an already-issued receipt.
     #[account()]
-    pub participant: Signer<'info>,
+    pub participant: UncheckedAccount<'info>,
 
     /// CHECK: Instructions sysvar used to verify the preceding Ed25519 receipt instruction.
     #[account(address = INSTRUCTIONS_SYSVAR_ID @ GiveawayError::InvalidAccount)]

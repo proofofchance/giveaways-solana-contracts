@@ -4,6 +4,7 @@
 //! for the giveaways program. Each instruction is implemented as a separate
 //! module for better organization.
 
+pub mod attest_reveal;
 pub mod attest_uploaded;
 pub mod begin_upload_phase;
 pub mod close_participant;
@@ -22,6 +23,7 @@ pub mod update_service_charge;
 pub mod upload_reveals;
 
 // Re-export only the instruction account context structs and input types
+pub use attest_reveal::AttestReveal;
 pub use attest_uploaded::AttestUploaded;
 pub use begin_upload_phase::BeginUploadPhase;
 pub use close_participant::CloseParticipant;

@@ -51,6 +51,7 @@ pub enum GiveawayEvent {
         commitment_hash: String,
         proof_text: String,
         is_update: bool,
+        participant_index: u64,
         timestamp: i64,
     },
     AttestationSubmitted {
@@ -107,6 +108,18 @@ pub enum GiveawayEvent {
         per_winner_lamports: u64,
         recompute_version: u32,
         winners: Vec<String>,
+        timestamp: i64,
+    },
+    /// Emitted during the canonical post-threshold scan so immutable replay can
+    /// reconstruct every winner without reading participant accounts.
+    WinnerSelected {
+        giveaway_id: u64,
+        giveaway: String,
+        participant: String,
+        participant_account: String,
+        candidate_key: String,
+        recompute_version: u32,
+        emission_index: u32,
         timestamp: i64,
     },
     FinalizationChunkProcessed {

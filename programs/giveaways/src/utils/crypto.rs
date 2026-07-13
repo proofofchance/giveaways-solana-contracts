@@ -105,6 +105,22 @@ pub fn compute_finalization_seed_v2(
     hasher.finalize().into()
 }
 
+/// Protocol-v3 seed bound to the canonical participant-index reveal commitment.
+pub fn compute_finalization_seed_v3(
+    giveaway_id: u64,
+    aggregate_hash: [u8; 32],
+    eligible_count: u64,
+    participants_commitment: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GIVEAWAY_FINALIZATION_SEED_DOMAIN_V3);
+    hasher.update(giveaway_id.to_le_bytes());
+    hasher.update(eligible_count.to_le_bytes());
+    hasher.update(aggregate_hash);
+    hasher.update(participants_commitment);
+    hasher.finalize().into()
+}
+
 /// Compute one participant's deterministic ranking key.
 pub fn compute_candidate_rank(seed: &[u8; 32], participant: &Pubkey) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -123,10 +139,16 @@ pub fn compute_candidate_key(seed: &[u8; 32], participant: &Pubkey) -> [u8; 64] 
     key
 }
 
-pub fn compute_participant_commitment_leaf(participant: &Pubkey) -> [u8; 32] {
+pub fn compute_participant_commitment_leaf(
+    participant_index: u64,
+    participant: &Pubkey,
+    reveal_digest: [u8; 32],
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(b"GIVEAWAY_PARTICIPANT_V2");
+    hasher.update(b"GIVEAWAY_PARTICIPANT_V3");
+    hasher.update(participant_index.to_le_bytes());
     hasher.update(participant.as_ref());
+    hasher.update(reveal_digest);
     hasher.finalize().into()
 }
 

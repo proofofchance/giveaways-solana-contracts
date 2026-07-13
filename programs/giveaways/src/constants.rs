@@ -29,6 +29,9 @@ pub const MIN_WINNERS: u32 = 1;
 /// Maximum number of winners allowed per giveaway
 pub const MAX_WINNERS: u32 = 1000;
 
+/// Bound the resumable settlement workload for one giveaway.
+pub const MAX_PARTICIPANTS: u64 = 4_096;
+
 /// Minimum amount a finalized winner must receive.
 pub const MIN_WINNER_PAYOUT_LAMPORTS: u64 = 1;
 
@@ -73,8 +76,11 @@ pub const GIVEAWAY_SEED_DOMAIN_V1: &[u8] = b"GIVEAWAY_SEED_V1";
 pub const GIVEAWAY_DRAW_DOMAIN_V1: &[u8] = b"GIVEAWAY_DRAW_V1";
 pub const GIVEAWAY_RULE_VERSION_V1: &str = "giveaway-poc-v1";
 pub const GIVEAWAY_FINALIZATION_SEED_DOMAIN_V2: &[u8] = b"GIVEAWAY_FINALIZE_SEED_V2";
+pub const GIVEAWAY_FINALIZATION_SEED_DOMAIN_V3: &[u8] = b"GIVEAWAY_FINALIZE_SEED_V3";
 pub const GIVEAWAY_RANK_DOMAIN_V2: &[u8] = b"GIVEAWAY_RANK_V2";
 pub const GIVEAWAY_RULE_VERSION_V2: &str = "giveaway-poc-radix-threshold-v2";
+pub const GIVEAWAY_RULE_VERSION_V3: &str = "giveaway-poc-indexed-radix-v3";
+pub const GIVEAWAY_RULE_VERSION_V4: &str = "giveaway-poc-indexed-radix-v4-archival";
 
 // PDA Seeds
 pub const CONFIG_SEED: &[u8] = b"config";

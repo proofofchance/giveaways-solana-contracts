@@ -46,6 +46,9 @@ pub enum GiveawayError {
     #[msg("Invalid winner count: Must be between 1 and 1000")]
     InvalidWinnerCount,
 
+    #[msg("Participant limit reached for this giveaway")]
+    TooManyParticipants,
+
     #[msg("Invalid duration: Duration outside allowed range")]
     InvalidDuration,
 

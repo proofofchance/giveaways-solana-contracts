@@ -22,7 +22,6 @@ ones are:
 - `make giveaways-contracts.begin-giveaway-upload id=<GIVEAWAY_ID>`
 - `make giveaways-contracts.upload-reveals id=<GIVEAWAY_ID>`
 - `make giveaways-contracts.finalize-giveaway-winners id=<GIVEAWAY_ID>`
-- `make giveaways-contracts.lock-winners id=<GIVEAWAY_ID>`
 - `make giveaways-contracts.settle-payout-batch id=<GIVEAWAY_ID>`
 - `make giveaways-contracts.close-no-participants id=<GIVEAWAY_ID>`
 
@@ -30,18 +29,19 @@ Notes:
 
 - Giveaway branding and off-chain requirements stay outside the on-chain create
   flow.
-- The first production protocol uses an upload/attestation phase. Participant
-  attestations require a provider Ed25519 receipt, and reveal plaintext is
+- The upload/attestation phase accepts either a provider Ed25519 receipt or a
+  participant-signed direct reveal. Provider receipts bind the participant
+  wallet and may be relayed by any fee payer. Reveal plaintext is exactly
   `lucky_words || 0x1f || salt`.
 - Winner finalization validates every supplied participant account as a program
-  owned PDA derived from `["participant", giveaway, wallet]`, rejects duplicate
-  account keys or wallets, and processes the canonical reveal-included set in
-  chunks through `FinalizationLedger`. Each chunk marks participant finalization
-  inclusion, and the final chunk writes the normal `WinnersLedger` payout
-  commitment.
+  owned PDA derived from `["participant", giveaway, wallet]` and consumes the
+  exact immutable participant index expected by `FinalizationLedger`. All
+  participants are scanned; only verified, non-disqualified revealers are
+  eligible. Giveaways are capped at 4,096 participants.
 - Winner selection uses deterministic top-K ranking from the final reveal
-  aggregate, giveaway id, and participant wallet. This keeps large/open
-  giveaways fair without requiring every participant account in one transaction.
+  aggregate, indexed participant commitment, giveaway id, and participant
+  wallet. A final scan emits every winner for immutable replay, then winner
+  computation and locking complete atomically.
 - Giveaway accounts include an explicit layout version and reserved bytes so
   future controlled upgrades can add fields without immediately changing the
   serialized account size.
@@ -53,3 +53,7 @@ Notes:
   start the upload phase before the configured active deadline, but only when
   the program is built with the `allow-early-upload` Cargo feature.
 - Secrets are no longer stored inside this workspace.
+
+Participant-reveal entropy remains subject to a last-revealer reveal-or-forfeit
+choice. The selection is deterministic and reproducible, but is not equivalent
+to an external randomness beacon.

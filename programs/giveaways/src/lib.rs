@@ -7,19 +7,20 @@
 //!
 //! ### Proof-of-Chance Model
 //! - Participants provide a secret phrase that gets hashed on-chain
-//! - During upload window, participants upload plaintext to service provider
-//! - Provider uploads all reveals on-chain for transparent entropy generation
+//! - During the upload window, participants use a provider receipt or reveal directly on-chain
+//! - Verified reveal digests are aggregated for transparent entropy generation
 //! - Winners are selected deterministically using aggregated entropy
 //!
 //! ### Anti-Censorship Design
-//! - Participants can attest on-chain that they've uploaded their reveal
-//! - Provider must include all attested participants in reveal batch
+//! - Provider receipts may be relayed by any caller and bind the participant wallet
+//! - Participants can bypass a refusing/unavailable provider with `AttestReveal`
+//! - Provider must include all receipt-attested participants in reveal batches
 //! - If any attested participant is missing, settlement is blocked
 //!
-//! ### Manual Review System
-//! - Giveaway creators can disqualify participants after winner computation
-//! - All disqualifications are logged on-chain for transparency
-//! - Winners can be recomputed until locked by creator
+//! ### Eligibility and Finalization
+//! - Creator disqualification is restricted to the pre-settlement review window
+//! - Finalization consumes immutable participant indices and is permissionless
+//! - The final archival scan emits winners and locks the result atomically
 //!
 //! ## Account Architecture
 //!
@@ -28,7 +29,7 @@
 //! - **Giveaway**: `["giveaway", config_pubkey, giveaway_id_le_bytes]` - Individual giveaway state
 //! - **Participant**: `["participant", giveaway_pubkey, wallet_pubkey]` - Participant data
 //! - **Vault**: `["vault", giveaway_pubkey]` - Fund custody account
-//! - **WinnersLedger**: `["winners_ledger", giveaway_pubkey]` - Winner settlement data
+//! - **WinnersLedger**: `["winners_root_v2", giveaway_pubkey]` - Winner settlement data
 //! - **FinalizationLedger**: `["finalization_root_v2", giveaway_pubkey]` - Fixed radix state
 //!
 //! ## Instruction Flow
@@ -36,20 +37,18 @@
 //! 1. **Initialize**: Set up global configuration (once per deployment)
 //! 2. **CreateGiveaway**: Creator sets up giveaway with locked funds
 //! 3. **Participate**: Participants submit proof text and proof-of-chance hash
-//! 4. **AttestUploaded**: Participants attest to off-chain reveal upload
-//! 5. **UploadReveals**: Provider uploads batch of reveals for settlement
-//! 6. **FinalizeWinners**: Process reveal-included participants in chunks and store merkle commitment when complete
-//! 7. **DisqualifyParticipant**: Creator can remove invalid entries (with audit trail)
-//! 8. **RecomputeWinners**: Legacy path disabled; eligibility changes happen before upload
-//! 9. **LockWinners**: Freeze winner set and enable settlement
-//! 10. **SettlePayoutBatch**: Pay winners in batches using merkle proofs
+//! 4. **AttestUploaded / AttestReveal**: Include a committed reveal through receipt or direct path
+//! 5. **UploadReveals**: Provider uploads receipt-attested reveal batches
+//! 6. **DisqualifyParticipant**: Creator can remove invalid entries before settlement
+//! 7. **FinalizeWinners**: Run indexed aggregation, radix selection, and archival emission passes
+//! 8. **SettlePayoutBatch**: Pay equal-value winners verified against the locked threshold
 //!
 //! ## Security Features
 //!
 //! - **PDA-based accounts**: All accounts use program-derived addresses
 //! - **Locked funds**: Creator cannot withdraw; funds only go to winners
 //! - **Transparent operations**: All actions emit events for audit trail
-//! - **Anti-censorship**: Attestation system prevents provider manipulation
+//! - **Anti-censorship**: Direct reveal and receipt relay paths remove provider liveness control
 //! - **Deterministic selection**: Same entropy always produces same winners
 
 #![allow(unexpected_cfgs)]
@@ -63,9 +62,9 @@ pub mod state;
 pub mod utils;
 
 use instructions::{
-    attest_uploaded::*, begin_upload_phase::*, close_participant::*, create_giveaway::*,
-    disqualify_participant::*, extend_active_deadline::*, finalize_winners::*, initialize::*,
-    lock_winners::*, participate::*, recompute_winners::*, settle_giveaway::*,
+    attest_reveal::*, attest_uploaded::*, begin_upload_phase::*, close_participant::*,
+    create_giveaway::*, disqualify_participant::*, extend_active_deadline::*, finalize_winners::*,
+    initialize::*, lock_winners::*, participate::*, recompute_winners::*, settle_giveaway::*,
     settle_no_eligible_giveaway::*, settle_payout_batch::*, update_service_charge::*,
     upload_reveals::*,
 };
@@ -162,6 +161,16 @@ pub mod giveaways {
     /// 3. `[signer]` Participant wallet
     pub fn attest_uploaded(ctx: Context<AttestUploaded>) -> Result<()> {
         instructions::attest_uploaded::process(ctx)
+    }
+
+    /// Verify and include the participant's committed reveal directly on-chain.
+    /// This path does not require a provider receipt.
+    pub fn attest_reveal(
+        ctx: Context<AttestReveal>,
+        lucky_words: String,
+        salt: Vec<u8>,
+    ) -> Result<()> {
+        instructions::attest_reveal::process(ctx, lucky_words, salt)
     }
 
     /// Upload batch of participant reveals

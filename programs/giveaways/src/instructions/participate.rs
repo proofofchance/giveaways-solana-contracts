@@ -65,6 +65,10 @@ pub fn process(
         // Update existing participation
         participant_account.update(commitment_hash, proof_text.clone(), clock.unix_timestamp);
     } else {
+        require!(
+            giveaway.participants_count < MAX_PARTICIPANTS,
+            GiveawayError::TooManyParticipants
+        );
         // New participation
         participant_account.initialize(
             giveaway.key(),
@@ -72,6 +76,7 @@ pub fn process(
             commitment_hash,
             proof_text.clone(),
             clock.unix_timestamp,
+            giveaway.participants_count,
         );
 
         // Increment participant count
@@ -87,6 +92,7 @@ pub fn process(
         commitment_hash: hex::encode(commitment_hash),
         proof_text,
         is_update,
+        participant_index: participant_account.participant_index(),
         timestamp: clock.unix_timestamp,
     }
     .emit();
