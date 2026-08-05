@@ -6,7 +6,7 @@
 //! ## Core Concepts
 //!
 //! ### Proof-of-Chance Model
-//! - Participants provide a secret phrase that gets hashed on-chain
+//! - Participants provide a lucky phrase that gets hashed on-chain
 //! - During the upload window, participants use a provider receipt or reveal directly on-chain
 //! - Verified reveal digests are aggregated for transparent entropy generation
 //! - Winners are selected deterministically using aggregated entropy
