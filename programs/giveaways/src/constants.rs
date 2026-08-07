@@ -8,7 +8,7 @@
 /// Maximum length for participant proof text (UTF-8 bytes)
 pub const MAX_PROOF_TEXT_LEN: usize = 256;
 
-/// Maximum length for lucky words in proof-of-chance (UTF-8 bytes)
+/// Maximum length for a lucky phrase in proof-of-chance (UTF-8 bytes)
 pub const MAX_LUCKY_WORDS_LEN: usize = 32;
 
 /// Maximum length for salt in proof-of-chance (bytes)
@@ -17,7 +17,7 @@ pub const MAX_SALT_LEN: usize = 16;
 /// Maximum length for reveal plaintext (lucky_words + 0x1f + salt)
 pub const MAX_REVEAL_PLAINTEXT_LEN: usize = MAX_LUCKY_WORDS_LEN + 1 + MAX_SALT_LEN;
 
-/// Separator between lucky words and salt in proof-of-chance reveal plaintext.
+/// Separator between the lucky phrase and salt in proof-of-chance reveal plaintext.
 pub const REVEAL_SEPARATOR: u8 = 0x1f;
 
 /// Maximum service fee in basis points (99.99%)
