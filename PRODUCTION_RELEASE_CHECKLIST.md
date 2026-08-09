@@ -54,7 +54,7 @@ state for production builds.
 5. If this release changes account layouts or indexed event counter widths,
    deploy the matching The Ark migration before users rely on the upgraded
    program. The wide-counter giveaway ABI requires
-   `the-ark-pg/db/migrations/0013_giveaway_wide_counters.sql`.
+   `the-ark/db/migrations/0013_giveaway_wide_counters.sql`.
 
 ## Deploy
 
@@ -75,8 +75,8 @@ verify the upgrade authority immediately after deployment.
 1. Refresh The Ark program deployment metadata and runtime snapshot:
 
    ```bash
-   ./scripts/poc-env.sh production ark -- make -e -C the-ark-pg deployment-manifest-refresh
-   ./scripts/poc-env.sh production ark -- make -e -C the-ark-pg deployment-runtime-env-refresh
+   ./scripts/poc-env.sh production ark -- make -e -C the-ark deployment-manifest-refresh
+   ./scripts/poc-env.sh production ark -- make -e -C the-ark deployment-runtime-env-refresh
    ./scripts/poc-verify-enabled-deployment-manifest.sh production
    ```
 
